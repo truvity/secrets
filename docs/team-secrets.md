@@ -215,7 +215,7 @@ keep, because a repository's `make secrets` target is this one line:
   `-format=env` renders whatever fields there are, which for zero fields
   is nothing, and passes `bao`'s own (successful) exit code through
   unchanged — so the target must check that the file it wrote is
-  non-empty itself, the same way the removed `accessctl secrets env`
+  non-empty itself, the same way the removed `sluisctl secrets env`
   command used to fail on a listing of zero names. An empty `.env` is
   the failure mode nobody notices: the stack starts with every variable
   unset and reads as merely misconfigured, days later and never at the
