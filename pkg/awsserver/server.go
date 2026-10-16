@@ -3,7 +3,6 @@ package awsserver
 import (
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
@@ -277,36 +276,4 @@ func publishOnly(topicARN pulumi.StringOutput, sid string) pulumi.StringOutput {
 	return topicARN.ApplyT(func(arn string) (string, error) {
 		return PublishOnlyPolicy(sid, arn)
 	}).(pulumi.StringOutput)
-}
-
-// WithLegacyParent adopts roles created as children of another component
-// type before they moved onto [NewPodRole]: each PodRole, IAM role, inline
-// policy and association carries an alias to the URN it has in state, under
-// a component of legacyType named after the role (the policy "<role>-policy"
-// and the association "<role>-pia" under the role's component). Without the
-// aliases the preview would replace every role.
-func WithLegacyParent(ctx *pulumi.Context, legacyType string) Option {
-	return WithResourceOptions(func(kind, name string) []pulumi.ResourceOption {
-		var parent string
-
-		switch kind {
-		case KindPodRole:
-			return []pulumi.ResourceOption{pulumi.Aliases([]pulumi.Alias{{
-				Type: pulumi.String(legacyType), Name: pulumi.String(name), NoParent: pulumi.Bool(true),
-			}})}
-		case KindIAMRole:
-			parent = name
-		case KindIAMRolePolicy:
-			parent = strings.TrimSuffix(name, "-policy")
-		case KindPodIdentityAssociation:
-			parent = strings.TrimSuffix(name, "-pia")
-		default:
-			return nil
-		}
-
-		return []pulumi.ResourceOption{pulumi.Aliases([]pulumi.Alias{{
-			Type: pulumi.String(kind), Name: pulumi.String(name),
-			ParentURN: pulumi.CreateURN(pulumi.String(parent), pulumi.String(legacyType), nil, pulumi.String(ctx.Project()), pulumi.String(ctx.Stack())),
-		}})}
-	})
 }

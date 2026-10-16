@@ -5,6 +5,12 @@ heading here is a patch cut automatically for dependency bumps alone; its
 GitHub Release lists them. Both charts are released at every version, and
 from v0.2.0 on the Go module and `openbaoctl` with them.
 
+## Unreleased
+
+### Removed
+
+- **Breaking (`pkg/awsserver`): `WithLegacyParent` is removed.** It aliased every pod role, IAM role, inline policy and association from the URN it had under the component type the roles were created with, before they moved onto `NewPodRole`. A stack applied with `NewPodRole` holds the new URNs, so the aliases resolve to nothing. Apply every stack that passes it with your current version, then drop the option: a preview shows no create or delete. An installation that still needs an alias passes it through `WithResourceOptions`.
+
 ## v0.42.1
 
 - Dependency updates.
