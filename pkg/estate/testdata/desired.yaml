@@ -31,21 +31,6 @@ pki:
       maxPathLength: 2
       permittedDomains: []
       artifactPath: testdata/pki-roots/example-root-2026-09-intermediate-origin.yaml
-  legacy:
-    root:
-      mount: pki-example-root
-      issuerName: example-root
-      commonName: Example Legacy Root
-      ttl: 87600h
-      maxPathLength: 2
-      permittedDomain: example.private
-    parent:
-      mount: pki-example-private
-      issuerName: example-private
-      commonName: example.private Legacy CA
-      ttl: 43800h
-      maxPathLength: 1
-      permittedDomain: example.private
 root:
   auth:
     - path: jwt-roster
@@ -149,16 +134,7 @@ rootWorkloads:
         - path: sys/namespaces
           capabilities:
             - list
-        - path: pki-example-root/cert/ca
-          capabilities:
-            - read
-        - path: pki-example-root/issuer/example-root/json
-          capabilities:
-            - read
         - path: pki-example-private/cert/ca
-          capabilities:
-            - read
-        - path: pki-example-private/issuer/example-private/json
           capabilities:
             - read
         - path: pki-example-private/issuer/example-private-2026-09/json
@@ -173,18 +149,15 @@ rootWorkloads:
         - path: alpha/kv/data/canary
           capabilities:
             - read
-        - path: alpha/pki/cert/ca
-          capabilities:
-            - read
-        - path: alpha/pki/issuer/example-root-alpha/json
-          capabilities:
-            - read
         - path: alpha/pki/cert/*
           capabilities:
             - read
         - path: alpha/pki/issue/restore-check
           capabilities:
             - update
+        - path: alpha/pki/cert/ca
+          capabilities:
+            - read
         - path: alpha/pki/issuer/example-private-2026-09-alpha/json
           capabilities:
             - read
@@ -203,18 +176,15 @@ rootWorkloads:
         - path: beta/kv/data/canary
           capabilities:
             - read
-        - path: beta/pki/cert/ca
-          capabilities:
-            - read
-        - path: beta/pki/issuer/example-root-beta/json
-          capabilities:
-            - read
         - path: beta/pki/cert/*
           capabilities:
             - read
         - path: beta/pki/issue/restore-check
           capabilities:
             - update
+        - path: beta/pki/cert/ca
+          capabilities:
+            - read
         - path: beta/pki/issuer/example-private-2026-09-beta/json
           capabilities:
             - read
@@ -227,18 +197,15 @@ rootWorkloads:
         - path: ops/kv/data/canary
           capabilities:
             - read
-        - path: ops/pki/cert/ca
-          capabilities:
-            - read
-        - path: ops/pki/issuer/example-root-ops/json
-          capabilities:
-            - read
         - path: ops/pki/cert/*
           capabilities:
             - read
         - path: ops/pki/issue/restore-check
           capabilities:
             - update
+        - path: ops/pki/cert/ca
+          capabilities:
+            - read
         - path: ops/pki/issuer/example-private-2026-09-ops/json
           capabilities:
             - read
@@ -269,17 +236,6 @@ namespaces:
   - name: alpha
     kv: kv
     canary: canary
-    legacyPki:
-      mount: pki
-      issuerName: example-root-alpha
-      commonName: alpha.example.private Intermediate CA
-      ttl: 26280h
-      maxPathLength: 0
-      permittedDomain: alpha.example.private
-      domain: alpha.example.private
-      leafRole: cert-manager
-      leafTtl: 720h
-      leafMaxTtl: 2160h
     issuingCas:
       - trustDomain: private
         mount: pki
@@ -467,14 +423,6 @@ namespaces:
             userClaim: sub
             policies:
               - worker-sign
-            ttl: 15m
-          - name: cert-manager
-            boundAudiences:
-              - openbao-cert-manager
-            boundSubject: system:serviceaccount:cert-manager:cert-manager
-            userClaim: sub
-            policies:
-              - pki-cert-manager
             ttl: 15m
           - name: private-ca
             boundAudiences:
@@ -681,11 +629,6 @@ namespaces:
             capabilities:
               - list
               - read
-      - name: pki-cert-manager
-        rules:
-          - path: pki/sign/cert-manager
-            capabilities:
-              - update
       - name: pki-identity-ca
         rules:
           - path: pki-identity/sign/identity
@@ -782,17 +725,6 @@ namespaces:
   - name: beta
     kv: kv
     canary: canary
-    legacyPki:
-      mount: pki
-      issuerName: example-root-beta
-      commonName: beta.example.private Intermediate CA
-      ttl: 26280h
-      maxPathLength: 0
-      permittedDomain: beta.example.private
-      domain: beta.example.private
-      leafRole: cert-manager
-      leafTtl: 720h
-      leafMaxTtl: 2160h
     issuingCas:
       - trustDomain: private
         mount: pki
@@ -934,14 +866,6 @@ namespaces:
             policies:
               - eso-app
             ttl: 1h
-          - name: cert-manager
-            boundAudiences:
-              - openbao-cert-manager
-            boundSubject: system:serviceaccount:cert-manager:cert-manager
-            userClaim: sub
-            policies:
-              - pki-cert-manager
-            ttl: 15m
           - name: private-ca
             boundAudiences:
               - openbao-private-ca
@@ -1072,11 +996,6 @@ namespaces:
           - path: kv/data/metrics/write-token
             capabilities:
               - read
-      - name: pki-cert-manager
-        rules:
-          - path: pki/sign/cert-manager
-            capabilities:
-              - update
       - name: pki-origin-ca
         rules:
           - path: pki-origin/sign/origin
@@ -1132,17 +1051,6 @@ namespaces:
   - name: ops
     kv: kv
     canary: canary
-    legacyPki:
-      mount: pki
-      issuerName: example-root-ops
-      commonName: ops.example.private Intermediate CA
-      ttl: 26280h
-      maxPathLength: 0
-      permittedDomain: ops.example.private
-      domain: ops.example.private
-      leafRole: cert-manager
-      leafTtl: 720h
-      leafMaxTtl: 2160h
     issuingCas:
       - trustDomain: private
         mount: pki
@@ -1311,14 +1219,6 @@ namespaces:
             policies:
               - exporter
             ttl: 1h
-          - name: cert-manager
-            boundAudiences:
-              - openbao-cert-manager
-            boundSubject: system:serviceaccount:cert-manager:cert-manager
-            userClaim: sub
-            policies:
-              - pki-cert-manager
-            ttl: 15m
           - name: private-ca
             boundAudiences:
               - openbao-private-ca
@@ -1422,11 +1322,6 @@ namespaces:
       - name: ops:ssh:user
         rules:
           - path: ssh/sign/user
-            capabilities:
-              - update
-      - name: pki-cert-manager
-        rules:
-          - path: pki/sign/cert-manager
             capabilities:
               - update
       - name: pki-origin-ca

@@ -21,7 +21,9 @@ type ConfigOutputs struct {
 	// fleet still trusted a retired cluster CA. The stack no longer exports
 	// it; the field stays so a file written before it retired still parses.
 	InternalCAPEM string `yaml:"internalCaPem"`
-	// TrustRootCAPEM is the legacy trust root's certificate: a public anchor.
+	// TrustRootCAPEM was the retired self-signed root's certificate. The
+	// stack no longer exports it; the field stays so a file written before
+	// the root retired still parses.
 	TrustRootCAPEM string `yaml:"trustRootCaPem"`
 	// Namespaces are the environment namespaces configured: present once the
 	// stack has applied.
