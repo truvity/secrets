@@ -53,8 +53,6 @@ type (
 		KV string `yaml:"kv,omitempty"`
 		// Canary is the KV path the restore check reads back.
 		Canary string `yaml:"canary,omitempty"`
-		// LegacyPKI is the legacy environment intermediate and its leaf role.
-		LegacyPKI *EnvironmentPKI `yaml:"legacyPki,omitempty"`
 		// IssuingCAs are this environment's issuing CAs under the contract's
 		// root, one per trust domain, with the contract's leaf roles.
 		IssuingCAs []IssuingCA `yaml:"issuingCas,omitempty"`

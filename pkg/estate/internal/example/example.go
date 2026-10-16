@@ -56,8 +56,7 @@ func Inputs(t testing.TB, contractPath string) estate.Inputs {
 		Text: estate.Text{
 			OperatorKV: "operators only", EnvironmentKV: "the {env} secrets", ProjectKV: "the {project} secrets",
 			SSHUser: "the {env} SSH user CA", SSHHostWorkers: "the {env} workers' host CA", SSHHostFleets: "the {env} fleets' host CA",
-			HostAuth: "the {env} fleets' instance roles", LegacyRoot: "legacy root", LegacyParent: "legacy intermediate",
-			LegacyEnvironment: "{env} legacy certificates", IdentityBootstrap: "{env} identity CA",
+			HostAuth: "the {env} fleets' instance roles", IdentityBootstrap: "{env} identity CA",
 		},
 		Groups: estate.Groups{
 			Name: func(env, thing, role string) string { return env + ":" + thing + ":" + role },
@@ -112,15 +111,6 @@ func Inputs(t testing.TB, contractPath string) estate.Inputs {
 			PolicyPrefix:   "pki-", AudiencePrefix: "openbao-", Subject: sa("cert-manager", "cert-manager"),
 			DBClientRole: "db-client", RestoreRole: "restore-check", BootstrapSuffix: "-root-signed",
 			LegacyRoleIssuers: map[string]string{"alpha": "example-identity-old-alpha"},
-			Legacy: estate.Legacy{
-				Organization: "Example Org",
-				Root: estate.PKIAuthority{Mount: "pki-example-root", IssuerName: "example-root", CommonName: "Example Legacy Root",
-					TTL: "87600h", MaxPathLength: 2, PermittedDomain: "example.private"},
-				Parent: estate.PKIAuthority{Mount: "pki-example-private", IssuerName: "example-private", CommonName: "example.private Legacy CA",
-					TTL: "43800h", MaxPathLength: 1, PermittedDomain: "example.private"},
-				Domain: "example.private", Mount: "pki", TTL: "26280h",
-				LeafRole: "cert-manager", LeafPolicy: "pki-cert-manager", LeafAudience: "openbao-cert-manager", LeafTTL: "720h", LeafMaxTTL: "2160h",
-			},
 		},
 		HostFleets: []estate.HostFleet{{
 			Environment: "beta", Name: "edge", Domain: "edge.example.net", InstanceRoleARN: "arn:aws:iam::111122223333:role/beta-edge",

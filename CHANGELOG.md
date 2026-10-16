@@ -5,6 +5,12 @@ heading here is a patch cut automatically for dependency bumps alone; its
 GitHub Release lists them. Both charts are released at every version, and
 from v0.2.0 on the Go module and `openbaoctl` with them.
 
+## Unreleased
+
+### Removed
+
+- **`pkg/estate`: the self-signed legacy PKI chain is gone (breaking).** `PKI.Legacy` (type `Legacy`), `Text.LegacyRoot`, `Text.LegacyParent` and `Text.LegacyEnvironment`, `PrivatePKI.Legacy` (types `LegacyAuthorities`, `PKIAuthority`), `Namespace.LegacyPKI` (type `EnvironmentPKI`) and the stack output `trustRootCaPem` (`stack.OutputTrustRoot`) are removed. The desired state now holds only the contract's chains: the root namespace's PKI is the domain intermediates' mounts, and each environment's is its issuing CAs' mounts, with the contract's descriptions, lease bounds and default issuer. Applying it to a server that still holds the legacy chain DELETES the legacy root's mount, the legacy issuers in the shared mounts, the legacy leaf role, its policy and its cert-manager logins, and moves each shared mount's default issuer to the contract's. Prove nothing issues from or trusts the legacy chain first. `PKI.LegacyRoleIssuers` and `Desired.LegacyResourceNames` stay: they adopt resource names (the identity bootstrap requests and roles, and now the private domain's restore role on its issuing mounts), not the legacy chain. `ConfigOutputs.TrustRootCAPEM` stays so committed outputs still parse; the stack no longer writes it. The restore check's policy reads the private issuing mounts' certificates and issues from the restore role as before, now from the contract's issuing CAs.
+
 ## v0.42.1
 
 - Dependency updates.

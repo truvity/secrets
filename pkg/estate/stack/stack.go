@@ -21,9 +21,6 @@ const (
 	// OutputNamespaces lists the environment namespaces: its presence marks
 	// the configuration deployed.
 	OutputNamespaces = "namespaces"
-	// OutputTrustRoot is the legacy root's certificate: a public trust
-	// anchor.
-	OutputTrustRoot = "trustRootCaPem"
 	// OutputSSHUserCAs and OutputSSHHostCAs are each environment's SSH user
 	// and host CA public keys, by environment.
 	OutputSSHUserCAs = "sshUserCaPublicKeys"
@@ -57,8 +54,8 @@ type (
 // Deploy applies the desired state through pkg/apply -- every namespace below
 // root, root's jobs and web UI door, the PKI -- under the names existing state
 // holds (estate.Desired.LegacyResourceNames), and exports what consumers
-// read: the namespaces, the legacy trust root, each environment's SSH CA
-// keys, and the certificate requests the root ceremony signs.
+// read: the namespaces, each environment's SSH CA keys, and the certificate
+// requests the root ceremony signs.
 //
 // An identity environment CA that is not signed yet is bootstrapped beside
 // the apply: its mount and the request of the key the server generates,
@@ -85,7 +82,6 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 	}
 
 	c.Export(OutputNamespaces, pulumi.ToStringArray(result.Namespaces))
-	c.Export(OutputTrustRoot, result.Certificates[desired.PKI.Legacy.Root.IssuerName])
 	c.Export(OutputSSHUserCAs, environmentKeys(result.SSHCAPublicKeys, in.Names.SSH.Mount))
 	c.Export(OutputSSHHostCAs, environmentKeys(result.SSHHostCAPublicKeys, in.Names.SSH.HostMount))
 

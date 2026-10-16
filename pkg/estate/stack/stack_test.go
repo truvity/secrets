@@ -77,7 +77,7 @@ func deployOptions(chains estate.Chains) Options {
 }
 
 // The stack applies the example estate under the names state holds: the
-// legacy chain's resources under their mounts' names, an unsigned identity
+// restore role under its issuing mount's name, an unsigned identity
 // CA bootstrapped under the name the apply adopts once it is signed, and the
 // signed artifacts the ceremony committed for every external issuer.
 func TestDeployAppliesUnderTheAdoptedNames(t *testing.T) {
@@ -99,7 +99,7 @@ func TestDeployAppliesUnderTheAdoptedNames(t *testing.T) {
 
 	for _, want := range []string{
 		"vault:pkiSecret/secretBackendIntermediateCertRequest:SecretBackendIntermediateCertRequest pki-identity-beta-root-signed-csr",
-		"vault:pkiSecret/secretBackendIntermediateCertRequest:SecretBackendIntermediateCertRequest pki-example-private-csr",
+		"vault:pkiSecret/secretBackendRole:SecretBackendRole alpha-pki-role-restore-check",
 	} {
 		if !slices.Contains(mocks.names, want) {
 			t.Errorf("no %s among %d resources", want, len(mocks.names))
@@ -107,7 +107,7 @@ func TestDeployAppliesUnderTheAdoptedNames(t *testing.T) {
 	}
 
 	for _, name := range mocks.names {
-		if strings.HasSuffix(name, " example-private-csr") {
+		if strings.HasSuffix(name, " example-private-2026-09-alpha-role-restore-check") {
 			t.Errorf("%s registered under the apply's own name, not the one state holds", name)
 		}
 	}

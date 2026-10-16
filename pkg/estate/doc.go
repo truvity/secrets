@@ -12,8 +12,8 @@
 // cluster's writers, exporters and service log in to every environment they
 // reach; CI runners, host-signing workers and EC2 host fleets get the SSH
 // roles they sign with; the groups people hold become grants; and the PKI
-// contract's authorities, with a legacy chain still served beside them,
-// become mounts, cert-manager logins and credential roles.
+// contract's authorities become mounts, cert-manager logins and credential
+// roles.
 //
 // Nothing here names an estate. Every mount, role, policy, subject, group,
 // lifetime and description is a field of [Inputs] -- [Names], [Text],
