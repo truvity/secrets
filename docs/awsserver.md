@@ -51,10 +51,6 @@ least-privilege policy for its job. What another control plane creates (the
 snapshot bucket, the load balancer) is optional: until it exists the
 dependent pieces are skipped with a warning, and a re-run completes them.
 
-`WithLegacyParent(ctx, type)` adopts roles created under another component
-type, named after each role: every role, inline policy and association
-carries an alias to the URN it has in state.
-
 ## The alias contract
 
 A resource's Pulumi URN is its type, its logical name and its parents. The

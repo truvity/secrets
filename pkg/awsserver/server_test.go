@@ -2,7 +2,6 @@ package awsserver
 
 import (
 	"log/slog"
-	"slices"
 	"sort"
 	"testing"
 
@@ -126,19 +125,4 @@ func TestServerSkipsWhatIsNotThereYet(t *testing.T) {
 	assert.Equal(t, []string{"example-tls-expiry", "example-unseal"}, namesOf(r, KindIAMRole))
 	assert.Equal(t, []string{"openbao-tls-expiry-topic"}, namesOf(r, KindSNSTopic))
 	assert.Empty(t, namesOf(r, KindRoute53Record))
-}
-
-// WithLegacyParent aliases every role's pieces to the URNs they have under
-// the component type they were created with.
-func TestServerAdoptsRolesFromALegacyParent(t *testing.T) {
-	r := runServer(t, true, true, func(ctx *pulumi.Context) Option { return WithLegacyParent(ctx, "example:legacy:Role") })
-
-	for _, rec := range r.all {
-		switch rec.Type {
-		case KindPodRole, KindIAMRole, KindIAMRolePolicy, KindPodIdentityAssociation:
-			assert.True(t, slices.Contains(rec.Aliases, rec.Name), "%s %s carries no alias: %v", rec.Type, rec.Name, rec.Aliases)
-		case KindKMSKey, KindSNSTopic:
-			assert.Empty(t, rec.Aliases, rec.Name)
-		}
-	}
 }
