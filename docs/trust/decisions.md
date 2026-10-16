@@ -35,12 +35,13 @@ decision was taken.
 | [T-19](#t-19-the-origin-chain-is-separate-and-unconstrained) | The origin chain is separate and unconstrained | accepted |
 | [T-20](#t-20-cloudflare-a-root-token-mints-least-privilege-children) | Cloudflare: a root token mints least-privilege children | accepted |
 | [T-21](#t-21-the-gateway-signs-people-in) | The gateway signs people in | accepted |
-| [T-22](#t-22-storage-credentials-come-from-a-broker) | Storage credentials come from a broker | accepted |
+| [T-22](#t-22-storage-credentials-come-from-a-broker) | Storage credentials come from a broker | **superseded by T-28** |
 | [T-23](#t-23-passwords-are-an-explicit-fallback) | Passwords are an explicit fallback | accepted |
 | [T-24](#t-24-cnpg-secrets-always-carry-cnpgioreload) | CNPG Secrets always carry `cnpg.io/reload` | accepted |
 | [T-25](#t-25-people-ladder-roles-avoid-the-reserved-pg_-prefix) | People ladder roles avoid the reserved `pg_` prefix | accepted, names to be decided |
 | [T-26](#t-26-heavy-lifting-lives-in-the-library-consumers-keep-rows-values-and-thin-adapters) | Heavy lifting lives in the library; consumers keep rows, values and thin adapters | accepted |
 | [T-27](#t-27-the-kms-seal-plugin-arrives-by-init-container-from-a-digest-pinned-image-volume) | The KMS seal plugin arrives by init container from a digest-pinned image volume | accepted |
+| [T-28](#t-28-storage-credentials-come-from-the-issuers-cloudflare-presets) | Storage credentials come from the issuer's Cloudflare presets | accepted; supersedes T-22 |
 
 ---
 
@@ -442,9 +443,9 @@ and no shared single-sign-on proxy.
 
 ### T-22: Storage credentials come from a broker
 
-**Date:** 2026-09-27. **Status:** accepted.
+**Date:** 2026-09-27. **Status:** **superseded by [T-28](#t-28-storage-credentials-come-from-the-issuers-cloudflare-presets).**
 
-**Choice.** A broker in the Cloudflare component mints temporary, bucket-scoped storage credentials from a
+**Choice (as it was).** A broker in the Cloudflare component mints temporary, bucket-scoped storage credentials from a
 plain OIDC token, mapping a group only. The issuer mints third-party credentials only for systems whose
 membership it governs.
 
@@ -537,3 +538,32 @@ pull request. Rehearsed in the library (v0.23.0); runbook in
 check's scratch server installs the same plugin the same way, from the values
 `RestoreCheckValues()` renders
 ([server.md](../server.md#the-restore-check-needs-the-plugin-too)).
+
+---
+
+### T-28: Storage credentials come from the issuer's Cloudflare presets
+
+**Date:** 2026-10-09. **Status:** accepted; supersedes [T-22](#t-22-storage-credentials-come-from-a-broker).
+
+**Choice.** Short-lived R2 credentials come from the Cloudflare module of the access issuer
+(sluis): a **preset** names a disabled prototype token, and the issuer clones it into an
+expiring token for an identity its grants allow. A person or a CI job asks for one with
+`sluisctl cloudflare r2 <preset>` (an AWS `credential_process` answer). A workload that
+needs one gets it through the secret plane's ordinary delivery: the issuer writes the
+preset's credential to a parameter store, and External Secrets Operator syncs it into a
+Kubernetes Secret. The R2 credentials broker is retired: the Cloudflare module removed
+it in edge v2.19.0.
+
+**Why it was reversed.** No storage consumer was left on the broker, and the issuer's
+Cloudflare presets mint short-lived Cloudflare credentials from prototypes anyway, so a
+separate service holding a parent key was a second path for the same job.
+
+| Alternative | Pros | Cons |
+|---|---|---|
+| keep the broker | the parent key in its own service | a second service, chart and audit catalogue with no consumer; a separate grant language for one system |
+| long-lived bucket keys | trivial | no expiry |
+
+**Consequences.** Nothing in this library is R2-specific, as before: a workload's credential
+arrives as a Secret like any other. The token the issuer clones from is a prototype with no
+rights of its own until cloned; the Cloudflare root token that mints children
+([T-20](#t-20-cloudflare-a-root-token-mints-least-privilege-children)) is unchanged.

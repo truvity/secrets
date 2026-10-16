@@ -174,7 +174,7 @@ missing. See [people.md](people.md#sign-in).
 | **tunnel** | a remotely managed tunnel per (cluster, account); one daemon install per tunnel | the tunnel's ingress rules and DNS records come from the catalogue, exact rule before wildcard |
 | **origin certificates** | not Cloudflare's: the origin chain above | the daemon verifies against the pinned roots file |
 | **API tokens** | account-owned child tokens per stack | a **root token** that holds *only* the Account-API-Tokens permission mints the children (`edge`: tunnels, DNS, zone settings, certificates; `status`: tunnel plus DNS; `r2-admin`; one per bucket) |
-| **R2 access** | short-lived, bucket-scoped credentials | a broker verifies an OIDC token and maps **group only** to bucket, prefixes and permission |
+| **R2 access** | short-lived, bucket-scoped credentials | the issuer's Cloudflare presets clone a prototype token into an expiring one for a granted identity ([T-28](decisions.md#t-28-storage-credentials-come-from-the-issuers-cloudflare-presets)) |
 
 **Per-host packs.** A certificate pack's host list is *immutable*: editing it
 makes the state delete and re-create the pack. Deletion is instant; issuance
@@ -196,12 +196,13 @@ API use "Write" where a dashboard says "Edit", and there is no separate
 `rotation` string in the catalogue, not an expiry. Editing a token's permissions
 may not propagate until the token is rolled.
 
-**R2 credentials** do not go through OpenBAO's PKI or through the access
-issuer: a broker in the Cloudflare component verifies a plain OIDC token, maps a
-**group** to `bucket + prefixes + permission`, holds the parent key, and mints a
-temporary credential. Rationale: the issuer mints third-party credentials only for
-systems whose membership it governs; storage minting is not one, and keeping the
-parent key in its own service isolates it better than keeping it in the issuer.
+**R2 credentials** do not go through OpenBAO's PKI. The access issuer's Cloudflare
+module mints them: a preset names a disabled prototype token, and the issuer clones it
+into an expiring, bucket-scoped token for an identity its grants allow. People and CI
+jobs run `sluisctl cloudflare r2 <preset>`; a workload gets the credential as a Secret,
+written by the issuer to a parameter store and synced by External Secrets Operator.
+The broker that used to do this (a service in the Cloudflare component that held the
+parent key) is retired ([T-28](decisions.md#t-28-storage-credentials-come-from-the-issuers-cloudflare-presets)).
 
 ## OpenBAO's own endpoint
 
