@@ -636,16 +636,11 @@ func job(in *Inputs, j Job, access builder.Access) builder.Workload {
 }
 
 // restoreCheckAccess is what the restore check reads: every namespace's
-// canary, and the authority of every mount whose chain is trusted. Both
-// chains, because both are trusted: a restore that proves only the chain
-// being retired proves nothing about the one taking over.
+// canary, the authority of every mount whose chain is trusted, and on the
+// private domain's issuing mounts the certificates and the restore role it
+// issues from.
 func restoreCheckAccess(in *Inputs, desired *Desired) builder.Access {
-	legacy := &in.PKI.Legacy
-	access := builder.Access{
-		builder.Rules(builder.NamespacesRule()),
-		builder.CA("", legacy.Root.Mount, legacy.Root.IssuerName),
-		builder.CA("", legacy.Parent.Mount, legacy.Parent.IssuerName),
-	}
+	access := builder.Access{builder.Rules(builder.NamespacesRule())}
 
 	for i := range desired.PKI.Domains {
 		domain := &desired.PKI.Domains[i]
@@ -656,14 +651,16 @@ func restoreCheckAccess(in *Inputs, desired *Desired) builder.Access {
 		namespace := &desired.Namespaces[i]
 		access = append(access, builder.Canary(namespace.Name, namespace.KV, namespace.Canary))
 
-		if environment := namespace.LegacyPKI; environment != nil {
-			access = append(access,
-				builder.CA(namespace.Name, environment.Mount, environment.IssuerName),
-				builder.Rules(
-					model.Rule{Path: namespace.Name + "/" + environment.Mount + "/cert/*", Capabilities: []string{model.CapRead}},
-					model.Rule{Path: namespace.Name + "/" + environment.Mount + "/issue/" + in.PKI.RestoreRole, Capabilities: []string{model.CapUpdate}},
-				),
-			)
+		for j := range namespace.IssuingCAs {
+			issuing := &namespace.IssuingCAs[j]
+			if issuing.TrustDomain != in.PKI.Private || !offers(issuing, in.PKI.RestoreRole) {
+				continue
+			}
+
+			access = append(access, builder.Rules(
+				model.Rule{Path: namespace.Name + "/" + issuing.Mount + "/cert/*", Capabilities: []string{model.CapRead}},
+				model.Rule{Path: namespace.Name + "/" + issuing.Mount + "/issue/" + in.PKI.RestoreRole, Capabilities: []string{model.CapUpdate}},
+			))
 		}
 
 		for j := range namespace.IssuingCAs {
@@ -673,6 +670,11 @@ func restoreCheckAccess(in *Inputs, desired *Desired) builder.Access {
 	}
 
 	return access
+}
+
+// offers reports whether an issuing CA declares the named role.
+func offers(issuing *IssuingCA, role string) bool {
+	return slices.ContainsFunc(issuing.Roles, func(r model.PKIRole) bool { return r.Name == role })
 }
 
 // tenantProjects is one project namespace per tenant, each with a KV v2

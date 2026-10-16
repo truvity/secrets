@@ -58,8 +58,8 @@ type (
 		CISecrets []builder.SecretGrant `yaml:"ciSecrets,omitempty"`
 		// Stores says what a cluster's secret store kinds read.
 		Stores Stores `yaml:"stores"`
-		// PKI is the private PKI: the authored contract and the legacy chain
-		// served beside it.
+		// PKI is the private PKI: the authored contract and the names the
+		// estate gives what it derives.
 		PKI PKI `yaml:"pki"`
 		// HostFleets are fleets of hosts with no Kubernetes identity (EC2
 		// instances behind one IAM role) that sign their own SSH host
@@ -290,11 +290,6 @@ type (
 		SSHHostWorkers string `yaml:"sshHostWorkers"`
 		SSHHostFleets  string `yaml:"sshHostFleets"`
 		HostAuth       string `yaml:"hostAuth"`
-		// LegacyRoot, LegacyParent and LegacyEnvironment describe the
-		// legacy chain's mounts.
-		LegacyRoot        string `yaml:"legacyRoot"`
-		LegacyParent      string `yaml:"legacyParent"`
-		LegacyEnvironment string `yaml:"legacyEnvironment"`
 		// IdentityBootstrap describes an environment identity CA's mount
 		// before the CA is signed.
 		IdentityBootstrap string `yaml:"identityBootstrap"`
@@ -361,8 +356,6 @@ type (
 		// credential roles: {DBProjectRole}-{project}-{level}. Empty = none.
 		DBProjectRole string `yaml:"dbProjectRole,omitempty"`
 		RestoreRole   string `yaml:"restoreRole"`
-		// Legacy is the self-signed chain still served beside the contract's.
-		Legacy Legacy `yaml:"legacy"`
 		// LegacyRoleIssuers maps an environment to the issuer whose name its
 		// identity roles' Pulumi resources still carry, where a role moved
 		// onto a new issuer as the same object.
@@ -370,27 +363,5 @@ type (
 		// BootstrapSuffix ends the name of an environment identity CA's
 		// bootstrap request: <identity mount>-<env><suffix>-csr.
 		BootstrapSuffix string `yaml:"bootstrapSuffix"`
-	}
-
-	// Legacy is the self-signed chain: a root, an intermediate, and one
-	// environment intermediate with one leaf role in every environment.
-	Legacy struct {
-		// Organization is what its certificates carry.
-		Organization string       `yaml:"organization"`
-		Root         PKIAuthority `yaml:"root"`
-		Parent       PKIAuthority `yaml:"parent"`
-		// Domain is the private DNS domain: an environment's intermediate is
-		// constrained to <env>.<Domain>.
-		Domain string `yaml:"domain"`
-		// Mount and TTL are each environment intermediate's.
-		Mount string `yaml:"mount"`
-		TTL   string `yaml:"ttl"`
-		// LeafRole is its one leaf role, LeafPolicy and LeafAudience
-		// cert-manager's login to it.
-		LeafRole     string `yaml:"leafRole"`
-		LeafPolicy   string `yaml:"leafPolicy"`
-		LeafAudience string `yaml:"leafAudience"`
-		LeafTTL      string `yaml:"leafTtl"`
-		LeafMaxTTL   string `yaml:"leafMaxTtl"`
 	}
 )

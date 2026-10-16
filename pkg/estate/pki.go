@@ -18,13 +18,10 @@ type (
 	// PrivatePKI is the authority chain the server serves. Root and Domains
 	// are the contract's (pkg/pki). Root is NOT a mount: its key lives
 	// outside the server and signs exactly once, in the ceremony; the server
-	// only holds the certificates it signed. Legacy is the self-signed
-	// chain, still declared because its mounts and roles are what the server
-	// holds.
+	// only holds the certificates it signed.
 	PrivatePKI struct {
 		Root    RootAuthority     `yaml:"root"`
 		Domains []DomainAuthority `yaml:"domains"`
-		Legacy  LegacyAuthorities `yaml:"legacy"`
 	}
 
 	// RootAuthority is the contract's active root generation.
@@ -59,23 +56,6 @@ type (
 		ArtifactPath string `yaml:"artifactPath"`
 	}
 
-	// LegacyAuthorities is the self-signed chain's root and intermediate.
-	LegacyAuthorities struct {
-		Root   PKIAuthority `yaml:"root"`
-		Parent PKIAuthority `yaml:"parent"`
-	}
-
-	// PKIAuthority describes one legacy CA and the mount whose internal key
-	// holds it.
-	PKIAuthority struct {
-		Mount           string `yaml:"mount"`
-		IssuerName      string `yaml:"issuerName"`
-		CommonName      string `yaml:"commonName"`
-		TTL             string `yaml:"ttl"`
-		MaxPathLength   int    `yaml:"maxPathLength"`
-		PermittedDomain string `yaml:"permittedDomain"`
-	}
-
 	// IssuingCA is one environment's issuing CA in one trust domain, offering
 	// the leaf roles the contract declares. Its key never leaves the
 	// environment's namespace.
@@ -103,16 +83,6 @@ type (
 		CredentialRoles []CredentialRole `yaml:"credentialRoles,omitempty"`
 	}
 
-	// EnvironmentPKI is the legacy environment intermediate and its one
-	// constrained leaf role.
-	EnvironmentPKI struct {
-		PKIAuthority `yaml:",inline"`
-		Domain       string `yaml:"domain"`
-		LeafRole     string `yaml:"leafRole"`
-		LeafTTL      string `yaml:"leafTtl"`
-		LeafMaxTTL   string `yaml:"leafMaxTtl"`
-	}
-
 	// CredentialRole is a PKI role that signs a person's CSR, on one of the
 	// environment's issuing CAs: never cert-manager's.
 	CredentialRole struct {
@@ -133,12 +103,12 @@ type (
 )
 
 // configurePrivatePKI declares the whole authority chain: the root and the
-// domain intermediates from the contract, one issuing CA per trust domain in
-// every environment namespace, and beside them the legacy chain.
+// domain intermediates from the contract, and one issuing CA per trust
+// domain in every environment namespace.
 //
 // Everything the contract declares is pkg/pki's derivation; what is this
-// file's is the view of it, the policies and cert-manager logins that carry
-// each issuing CA's roles, and the legacy chain.
+// file's is the view of it, and the policies and cert-manager logins that
+// carry each issuing CA's roles.
 //
 // It returns each environment's cert-manager logins, by environment name,
 // which ride the environment's cluster mount after everything else on it.
@@ -206,7 +176,6 @@ func configurePrivatePKI(desired *Desired, inputs *Inputs, clusters []Cluster) (
 			MaxPathLength: generation.Certificate.MaxPathLen,
 			ArtifactPath:  contract.RootArtifactPath(generation.ID),
 		},
-		Legacy: LegacyAuthorities{Root: in.Legacy.Root, Parent: in.Legacy.Parent},
 	}
 
 	for i := range derivation.Domains {
@@ -232,11 +201,6 @@ func configurePrivatePKI(desired *Desired, inputs *Inputs, clusters []Cluster) (
 	for i := range desired.Namespaces {
 		namespace := &desired.Namespaces[i]
 
-		// The legacy chain first: its role is what every live issuer still
-		// names, and keeping it at the head keeps a review of an addition a
-		// review of what was added.
-		logins[namespace.Name] = append(logins[namespace.Name], configureLegacyEnvironmentPKI(inputs, namespace))
-
 		for j := range derivation.Issuing {
 			authority := &derivation.Issuing[j]
 			if authority.Environment != namespace.Name {
@@ -253,31 +217,6 @@ func configurePrivatePKI(desired *Desired, inputs *Inputs, clusters []Cluster) (
 	}
 
 	return logins, nil
-}
-
-// configureLegacyEnvironmentPKI keeps the legacy environment intermediate and
-// its leaf role exactly as deployed: a chain being retired is not re-shaped.
-// Its cert-manager login is returned.
-func configureLegacyEnvironmentPKI(inputs *Inputs, namespace *Namespace) builder.Workload {
-	legacy := &inputs.PKI.Legacy
-	domain := namespace.Name + "." + legacy.Domain
-
-	namespace.LegacyPKI = &EnvironmentPKI{
-		PKIAuthority: PKIAuthority{
-			Mount:           legacy.Mount,
-			IssuerName:      legacy.Root.IssuerName + "-" + namespace.Name,
-			CommonName:      domain + " Intermediate CA",
-			TTL:             legacy.TTL,
-			MaxPathLength:   0,
-			PermittedDomain: domain,
-		},
-		Domain:     domain,
-		LeafRole:   legacy.LeafRole,
-		LeafTTL:    legacy.LeafTTL,
-		LeafMaxTTL: legacy.LeafMaxTTL,
-	}
-
-	return certManagerLogin(inputs, legacy.LeafRole, legacy.LeafPolicy, legacy.LeafAudience, builder.Sign(legacy.Mount, legacy.LeafRole))
 }
 
 // pkiEnvironment is one environment's inputs to the library's derivation:

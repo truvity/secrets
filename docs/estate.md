@@ -62,19 +62,18 @@ and is never applied; the web UI's door and `Names.OperatorKV` are.
 after `PKI.ClusterIssuers[domain]`. An environment whose identity CA is not
 `PKI.Signed` yet renders nothing of the identity domain.
 
-`PKI.Legacy` is a self-signed chain still served beside the contract's: a
-root, an intermediate, and an environment intermediate with one leaf role in
-every namespace. The contract's authorities join the same mounts where the
-contract places them there.
+Each trust domain's intermediate is a mount in root, and each environment's
+issuing CAs are mounts in its namespace, all where the contract places them;
+each mount's default issuer is the contract's.
 
 ## Adopting existing state
 
 `Desired.LegacyResourceNames` maps the Pulumi name `pkg/apply` would give a
-resource to the name state already holds: the legacy chain's resources
-(named after their mounts), the restore role on the legacy environment
-mount, each identity CA's bootstrap request (`IdentityBootstrapCSRName`),
-and the identity roles of an environment `PKI.LegacyRoleIssuers` names. Pass
-it to `apply.RenameFrom`, and the first preview after adopting is empty.
+resource to the name state already holds: each identity CA's bootstrap
+request (`IdentityBootstrapCSRName`), the identity roles of an environment
+`PKI.LegacyRoleIssuers` names, and the restore role on the private domain's
+issuing mounts (`<namespace>-<mount>-role-<role>`). Pass it to
+`apply.RenameFrom`, and the first preview after adopting is empty.
 
 ## Store kinds
 
@@ -93,7 +92,6 @@ what consumers read:
 | Output | What |
 |---|---|
 | `namespaces` | the environment namespaces; its presence marks the configuration deployed |
-| `trustRootCaPem` | the legacy root's certificate, a public trust anchor |
 | `sshUserCaPublicKeys`, `sshHostCaPublicKeys` | each environment's SSH user and host CA keys, by environment |
 | `opts.DomainCSROutputs[domain]` | each trust domain's intermediate request, for the root ceremony |
 | `opts.EnvironmentCSROutput` | every identity environment CA's request, by environment, whichever phase it is in |
