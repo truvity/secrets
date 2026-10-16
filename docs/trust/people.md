@@ -68,7 +68,7 @@ long-lived key exists on a laptop.
 | `sluisctl psql` / `sluisctl pg -- <cmd>` | mints a `db-client` certificate, runs `psql` (or a command) with libpq's environment | a database session ([databases.md](databases.md#people)) |
 | `sluisctl kube-token` | exchanges for a Kubernetes API audience | a token for `kubectl` |
 | `sluisctl aws` | exchanges for an AWS federation audience | temporary AWS credentials |
-| `sluisctl cloudflare r2 <preset>` | exchanges for a granted R2 preset of the Cloudflare module | a temporary, bucket-scoped R2 credential (AWS `credential_process` output) |
+| `sluisctl cloudflare token <preset>` / `sluisctl cloudflare r2 <preset>` | asks the issuer for a granted Cloudflare preset, cloned from the preset's prototype token | a temporary Cloudflare API token, or a bucket-scoped R2 credential (AWS `credential_process` output) |
 | `sluisctl ssh known-hosts` | writes the host CAs it trusts as `@cert-authority` lines | a known-hosts file it owns |
 
 `--as <role>` and `--target <address>` for `pg`/`psql` are **PLANNED**

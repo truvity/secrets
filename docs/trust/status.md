@@ -45,7 +45,7 @@ Last reviewed: 2026-09-30.
 | gateway signs people in (`proxy.engine: envoy`) | LIVE | every browser application; a few consoles still on the older proxy |
 | per-host Cloudflare certificate packs, Total TLS | LIVE | |
 | Cloudflare root token and least-privilege children | LIVE | a legacy user token is being retired in two stages |
-| storage credentials broker | LIVE | |
+| storage credentials from the issuer's Cloudflare presets | LIVE | the R2 broker is retired ([T-28](decisions.md#t-28-storage-credentials-come-from-the-issuers-cloudflare-presets)) |
 | OpenBAO 2.6.3 security release on the management cluster | LIVE | nine advisories, including a cross-namespace policy-cache traversal; other clusters follow their own roll |
 | OpenBAO 2.7 seal as an external KMS plugin (`serverpreset.SealPlugin`) | IN PROGRESS | the preset, its validation and a Docker rehearsal (v0.23.0: no route out, KMS emulated: cold start, restarts, three-voter roll 2.6.3 to 2.7.0, revert of a standby) are delivered in this library; the move is under way for the management cluster, and the other clusters still run the built-in seal on 2.6.x ([server.md](../server.md#runbook-26-to-27-with-the-kms-seal-plugin)) |
 | customer and machine exposures | PLANNED | |
