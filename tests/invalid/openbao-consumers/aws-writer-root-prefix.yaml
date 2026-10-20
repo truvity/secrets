@@ -1,0 +1,10 @@
+# A prefix of the whole account is pinned to nothing.
+aws:
+  identity: podIdentity
+
+awsWriters:
+  - name: app-push
+    region: eu-example-1
+    role: arn:aws:iam::444455556666:role/a-writer
+    prefix: /
+    conditions: [{namespaces: [app]}]

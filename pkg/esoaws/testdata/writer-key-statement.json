@@ -1,0 +1,26 @@
+{
+  "Action": [
+    "kms:Decrypt",
+    "kms:Encrypt",
+    "kms:GenerateDataKey"
+  ],
+  "Condition": {
+    "ArnEquals": {
+      "aws:PrincipalArn": "arn:aws:iam::111122223333:role/a-eso-app-client-writer"
+    },
+    "StringEquals": {
+      "kms:ViaService": "ssm.eu-example-1.amazonaws.com"
+    },
+    "StringLike": {
+      "kms:EncryptionContext:PARAMETER_ARN": [
+        "arn:aws:ssm:eu-example-1:111122223333:parameter/app/client/*"
+      ]
+    }
+  },
+  "Effect": "Allow",
+  "Principal": {
+    "AWS": "arn:aws:iam::111122223333:root"
+  },
+  "Resource": "*",
+  "Sid": "ExternalSecretsWriterAEsoAppClientWriter"
+}

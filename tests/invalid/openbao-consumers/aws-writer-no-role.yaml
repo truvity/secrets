@@ -1,0 +1,7 @@
+aws:
+  identity: podIdentity
+awsWriters:
+  - name: app-push
+    region: eu-example-1
+    prefix: /app/client/
+    conditions: [{namespaces: [app]}]

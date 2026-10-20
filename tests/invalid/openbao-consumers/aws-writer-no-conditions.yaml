@@ -1,0 +1,8 @@
+# Without conditions every namespace could push.
+aws:
+  identity: podIdentity
+awsWriters:
+  - name: app-push
+    region: eu-example-1
+    role: arn:aws:iam::444455556666:role/a-writer
+    prefix: /app/client/

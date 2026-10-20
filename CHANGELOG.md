@@ -7,6 +7,13 @@ from v0.2.0 on the Go module and `openbaoctl` with them.
 
 ## Unreleased
 
+## v0.45.0
+
+### Added
+
+- **`openbao-consumers`: `awsWriters`, the narrow exception to reader-only AWS stores.** One `ClusterSecretStore` each on Parameter Store (`podIdentity` mode only), assuming a writer role and pinned to one `prefix` (starts and ends with `/`; External Secrets puts it in front of every `remoteKey`), usable from exactly one named namespace. The writer role must not be an `awsStores` role. `aws.admissionPolicy` admits exactly the writer stores a release lists, each pinned to its role, region, prefix and the Parameter Store service, and now also refuses a reader store that carries a `prefix`. A release that does not list `awsWriters` renders and admits as before, except for that one added refusal. See [docs/esoaws.md](docs/esoaws.md#writer-stores-the-narrow-exception).
+- **`pkg/esoaws`: `NewWriters`**, one writer role per grant: `ssm:GetParameter`, `PutParameter`, `AddTagsToResource` and `ListTagsForResource` on one prefix, and `kms:Encrypt`, `Decrypt` and `GenerateDataKey` on a required customer-managed key (`KMSKeyARN`, or `KMSKey` for a key the same program makes), through SSM only and for the prefix's parameters only; trusted by the PodIdentity cluster identity alone (add the role to `ClusterIdentityArgs.SourceRoles`). `WriterPolicy`, `WriterTrustPolicy` and `WriterKeyPolicyStatement` expose the documents. The Pulumi type is `truvity:secrets/esoaws:Writers`.
+
 ## v0.44.0
 
 ### Removed

@@ -133,6 +133,23 @@ spec:
         variables.expected[variables.obj.metadata.name].role +
         ', with no auth, additionalRoles, sessionTags, transitiveTagKeys or externalID'
       reason: Forbidden
+    # A reader store carries no prefix (the chart renders none), and a writer
+    # store carries exactly its rendered one, in its rendered region, on the
+    # Parameter Store service: the path a writer role is scoped to is the path
+    # its store is pinned to.
+    - expression: >-
+        !variables.releaseStore || ('prefix' in variables.expected[variables.obj.metadata.name] ?
+        (has(variables.aws.prefix) && variables.aws.prefix == variables.expected[variables.obj.metadata.name].prefix &&
+        has(variables.aws.region) && variables.aws.region == variables.expected[variables.obj.metadata.name].region &&
+        has(variables.aws.service) && variables.aws.service == 'ParameterStore') :
+        !has(variables.aws.prefix))
+      messageExpression: >-
+        variables.subject + ' is release openbao-consumers\'s, but differs from what it renders: ' +
+        ('prefix' in variables.expected[variables.obj.metadata.name] ?
+        'a writer store is pinned to exactly the prefix ' + variables.expected[variables.obj.metadata.name].prefix +
+        ' in region ' + variables.expected[variables.obj.metadata.name].region + ' on Parameter Store' :
+        'a reader store carries no prefix')
+      reason: Forbidden
 
 ---
 # Source: openbao-consumers/templates/aws-admission.yaml

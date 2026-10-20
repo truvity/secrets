@@ -1,0 +1,14 @@
+# A writer store may not reuse a reader store's role, or the reader store could write.
+aws:
+  identity: podIdentity
+awsStores:
+  - name: app-config
+    region: eu-example-1
+    role: arn:aws:iam::444455556666:role/a-shared
+    conditions: [{namespaces: [app]}]
+awsWriters:
+  - name: app-push
+    region: eu-example-1
+    role: arn:aws:iam::444455556666:role/a-shared
+    prefix: /app/client/
+    conditions: [{namespaces: [app]}]

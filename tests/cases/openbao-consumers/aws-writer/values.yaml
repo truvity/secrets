@@ -1,0 +1,24 @@
+# A reader store and one writer store on a cluster whose External Secrets
+# holds its own AWS identity (EKS Pod Identity). The writer store is the one
+# exception to reader-only stores: it assumes a writer role, is pinned to one
+# parameter prefix, and is usable from one namespace. The admission policy
+# admits exactly it.
+aws:
+  identity: podIdentity
+
+awsStores:
+  - name: example-app-config
+    region: eu-example-1
+    role: arn:aws:iam::444455556666:role/a-app-config
+    conditions:
+      - namespaces: [example-app]
+
+awsWriters:
+  - name: example-app-client-push
+    region: eu-example-1
+    role: arn:aws:iam::444455556666:role/a-eso-app-client-writer
+    prefix: /example/app/client/
+    annotations:
+      example.com/sync-wave: "55"
+    conditions:
+      - namespaces: [example-app]

@@ -37,6 +37,13 @@
 {{- $_ := set $expected .name (dict "sa" ($ref.name | default "") "ns" ($ref.namespace | default "")) }}
 {{- end }}
 {{- end }}
+{{- /* The release's writer stores (awsWriters, podIdentity only): the one
+       exception to reader-only stores. Each is pinned to its role, region
+       and prefix as well, and to the ParameterStore service; the readers
+       above are pinned to their role and to no prefix at all. */}}
+{{- range .Values.awsWriters }}
+{{- $_ := set $expected .name (dict "role" .role "region" .region "prefix" .prefix) }}
+{{- end }}
 {{- /* "Names auth of its own" for an object whose auth sits under P: a
        Secret or a ServiceAccount. An absent auth and an empty one are the
        same to External Secrets: its controller's own credentials. */}}
@@ -148,6 +155,23 @@ spec:
         variables.subject + ' is release {{ .Release.Name }}\'s, but differs from what it renders: it assumes exactly ' +
         variables.expected[variables.obj.metadata.name].role +
         ', with no auth, additionalRoles, sessionTags, transitiveTagKeys or externalID'
+      reason: Forbidden
+    # A reader store carries no prefix (the chart renders none), and a writer
+    # store carries exactly its rendered one, in its rendered region, on the
+    # Parameter Store service: the path a writer role is scoped to is the path
+    # its store is pinned to.
+    - expression: >-
+        !variables.releaseStore || ('prefix' in variables.expected[variables.obj.metadata.name] ?
+        (has(variables.aws.prefix) && variables.aws.prefix == variables.expected[variables.obj.metadata.name].prefix &&
+        has(variables.aws.region) && variables.aws.region == variables.expected[variables.obj.metadata.name].region &&
+        has(variables.aws.service) && variables.aws.service == 'ParameterStore') :
+        !has(variables.aws.prefix))
+      messageExpression: >-
+        variables.subject + ' is release {{ .Release.Name }}\'s, but differs from what it renders: ' +
+        ('prefix' in variables.expected[variables.obj.metadata.name] ?
+        'a writer store is pinned to exactly the prefix ' + variables.expected[variables.obj.metadata.name].prefix +
+        ' in region ' + variables.expected[variables.obj.metadata.name].region + ' on Parameter Store' :
+        'a reader store carries no prefix')
       reason: Forbidden
     {{- else }}
     # webIdentity: the release's store reads as its one rendered
