@@ -1,0 +1,14 @@
+# Store names share one namespace.
+aws:
+  identity: podIdentity
+awsStores:
+  - name: app-push
+    region: eu-example-1
+    role: arn:aws:iam::444455556666:role/a-reader
+    conditions: [{namespaces: [app]}]
+awsWriters:
+  - name: app-push
+    region: eu-example-1
+    role: arn:aws:iam::444455556666:role/a-writer
+    prefix: /app/client/
+    conditions: [{namespaces: [app]}]

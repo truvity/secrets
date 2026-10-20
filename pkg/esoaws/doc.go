@@ -52,6 +52,14 @@
 //	  aws:iam/role:Role                                          <grant>
 //	  aws:iam/rolePolicy:RolePolicy                              <grant>-policy
 //
+//	NewWriters          truvity:secrets/esoaws:Writers          <Name>
+//	  aws:iam/role:Role                                          <grant>
+//	  aws:iam/rolePolicy:RolePolicy                              <grant>-policy
+//
+// NewWriters is the narrow exception to "the stores read": one writer role
+// per grant, on one parameter prefix and one customer-managed key, trusted by
+// a PodIdentity cluster's controller identity alone (docs/esoaws.md#writer-stores-the-narrow-exception).
+//
 // The OIDC provider is registered only for a WebIdentity cluster that names
 // no existing one (WebIdentity.ProviderARN).
 //

@@ -275,6 +275,57 @@ turned on (`aws.admissionPolicy.enabled: true`) as a second line.
 [safety.md](safety.md#an-aws-identity-any-namespace-can-borrow) has the
 same in the list of refusals.
 
+## Writer stores: the narrow exception
+
+Everything above is read-only: a reader role cannot write, and the admission
+policy refuses any AWS `ClusterSecretStore` the release does not render. A few
+flows need the other direction: a `PushSecret` that copies a Kubernetes Secret
+(a certificate cert-manager renews, say) into Parameter Store for a consumer
+that has no cluster. `awsWriters` and `esoaws.NewWriters` are that exception,
+and they are built to stay one:
+
+- **PodIdentity only.** A writer store assumes a writer role with the
+  controller's own credentials, so it needs the admission policy to hold it.
+- **One role per prefix.** `WriteGrant.Prefix` is one parameter path
+  (`/app/client/`: starts and ends with `/`, never `/`, no wildcard). The
+  role may `ssm:GetParameter`, `PutParameter`, `AddTagsToResource` and
+  `ListTagsForResource` on that path (`parameter/app/client/*`) and nothing
+  else: no delete, no other path, no `DescribeParameters`. `GetParameter`
+  and `ListTagsForResource` are what the provider calls before it
+  overwrites (it compares the stored value and refuses a parameter it did not
+  create); it never deletes unless a `PushSecret` sets `deletionPolicy:
+  Delete`, which this role cannot do.
+- **A customer-managed key, required.** `WriteGrant.KMSKeyARN`, or `KMSKey`
+  when the same program makes the key (an output; the policy waits for it). The writer
+  gets `kms:Encrypt`, `Decrypt` and `GenerateDataKey` on it, through SSM
+  only and for the prefix's parameters only. Parameters on the account's
+  default `aws/ssm` key are readable by every principal that may call SSM,
+  which is why a reader of a *secret* written here must be named in the
+  key's policy. `WriterKeyPolicyStatement` is the writer's statement for
+  that policy, in the shape the account root narrowed by `aws:PrincipalArn`
+  takes.
+- **The same trust as a reader.** Only the cluster identity role
+  (`NewClusterIdentity`; add the writer role to its `SourceRoles`), for
+  `sts:AssumeRole` and Pod Identity's tag keys.
+- **The chart pins it.** `awsWriters[]` renders a `ClusterSecretStore` with
+  `service: ParameterStore`, the writer `role`, and `prefix` (ESO puts
+  the provider's `prefix` in front of every `remoteKey`, for reads and pushes
+  alike, so a `PushSecret` names `ca`, not `/app/client/ca`). It is usable
+  from exactly one namespace, named (no selector, no regex). The writer
+  role must not be any `awsStores` role.
+- **The admission policy admits exactly that store.** A release store is
+  judged against what the release renders: a writer store must carry its
+  role, region, prefix and the Parameter Store service, and no `auth`,
+  `additionalRoles`, `sessionTags` and so on; a *reader* store must carry no
+  `prefix`. Another writer store, a writer store with a wider prefix, or a
+  reader store pointed at a writer role is refused. `just
+  admission-conformance` proves each.
+
+The consequence to keep in view: the store is as narrow as its namespace and
+its role. Anyone who can create a `PushSecret` in the store's namespace can
+write the prefix, so choose a namespace only administrators change, and name
+the prefix for one purpose.
+
 ## Wiring it up
 
 The order matters. IAM resolves a trust policy's principal when the policy

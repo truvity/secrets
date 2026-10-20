@@ -1,0 +1,28 @@
+{
+  "Statement": [
+    {
+      "Action": [
+        "sts:AssumeRole",
+        "sts:TagSession"
+      ],
+      "Condition": {
+        "ForAllValues:StringEquals": {
+          "aws:TagKeys": [
+            "eks-cluster-arn",
+            "eks-cluster-name",
+            "kubernetes-namespace",
+            "kubernetes-service-account",
+            "kubernetes-pod-name",
+            "kubernetes-pod-uid"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111122223333:role/a-external-secrets"
+      },
+      "Sid": "ExternalSecretsOperator"
+    }
+  ],
+  "Version": "2012-10-17"
+}

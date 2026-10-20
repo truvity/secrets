@@ -1,0 +1,8 @@
+# A writer store pinned to no path.
+aws:
+  identity: podIdentity
+awsWriters:
+  - name: app-push
+    region: eu-example-1
+    role: arn:aws:iam::444455556666:role/a-writer
+    conditions: [{namespaces: [app]}]

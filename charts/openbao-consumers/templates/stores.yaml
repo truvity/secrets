@@ -80,8 +80,8 @@ spec:
 {{- end }}
 {{- end }}
 {{- $mode := .Values.aws.identity }}
-{{- if and .Values.awsStores (not $mode) }}
-{{- fail "aws.identity is required with awsStores: podIdentity or webIdentity. There is no default: the modes are mutually exclusive on a cluster, because a controller identity beside per-store identities is one any store without auth borrows" }}
+{{- if and (or .Values.awsStores .Values.awsWriters) (not $mode) }}
+{{- fail "aws.identity is required with awsStores and awsWriters: podIdentity or webIdentity. There is no default: the modes are mutually exclusive on a cluster, because a controller identity beside per-store identities is one any store without auth borrows" }}
 {{- end }}
 {{- range $store := .Values.awsStores }}
 {{- if not $store.name }}{{- fail "every entry of awsStores needs a name" }}{{- end }}
@@ -156,4 +156,58 @@ spec:
             name: {{ $ref.name | quote }}
             namespace: {{ $ref.namespace | quote }}
       {{- end }}
+{{- end }}
+{{- range $w := .Values.awsWriters }}
+{{- if not $w.name }}{{- fail "every entry of awsWriters needs a name" }}{{- end }}
+{{- if ne $mode "podIdentity" }}
+{{- fail (printf "awsWriters.%s needs aws.identity podIdentity: a writer store assumes a writer role with the controller's own credentials, and a webIdentity cluster has none; the exception to reader-only stores exists for the one mode whose admission policy can pin it" $w.name) }}
+{{- end }}
+{{- if not $w.region }}
+{{- fail (printf "awsWriters.%s needs region — the region of the parameters it writes" $w.name) }}
+{{- end }}
+{{- if not $w.role }}
+{{- fail (printf "awsWriters.%s needs role — the writer role in the parameters' account" $w.name) }}
+{{- end }}
+{{- if not $w.prefix }}
+{{- fail (printf "awsWriters.%s needs prefix — the one parameter path it may write; a writer store without one is pinned to nothing" $w.name) }}
+{{- end }}
+{{- if or (not (hasPrefix "/" $w.prefix)) (not (hasSuffix "/" $w.prefix)) (eq (trim (trimAll "/" $w.prefix)) "") (contains "*" $w.prefix) (contains "//" $w.prefix) }}
+{{- fail (printf "awsWriters.%s.prefix %q must start and end with \"/\", name at least one segment, and have no wildcard or empty segment" $w.name $w.prefix) }}
+{{- end }}
+{{- range $r := $.Values.awsStores }}
+{{- if eq $r.role $w.role }}
+{{- fail (printf "awsWriters.%s uses the role of awsStores.%s: a writer role is not a reader's, or the reader store could write" $w.name $r.name) }}
+{{- end }}
+{{- end }}
+{{- include "consumers.claim" (dict "registry" $registry "kind" "ClusterSecretStore" "name" $w.name "by" (printf "awsWriters.%s" $w.name)) }}
+{{- include "consumers.requireConditions" (dict "conditions" $w.conditions "by" (printf "awsWriters.%s" $w.name)) }}
+{{- if ne (len $w.conditions) 1 }}
+{{- fail (printf "awsWriters.%s needs exactly one condition naming its namespaces" $w.name) }}
+{{- end }}
+{{- if not (index $w.conditions 0).namespaces }}
+{{- fail (printf "awsWriters.%s: the condition must list namespaces by name (no selector, no regex)" $w.name) }}
+{{- end }}
+---
+{{- /* A writer store: the one exception to "AWS stores read". It assumes the
+       writer role of its grant with the controller's own credentials, as a
+       reader store does, and is pinned to one prefix, which ESO puts in front
+       of every remoteKey (reads and pushes alike). The admission policy admits
+       exactly this shape. docs/esoaws.md#writer-stores. */}}
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: {{ $w.name }}
+  {{- with include "consumers.annotations" (dict "root" $ "extra" $w.annotations) | fromYaml }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  conditions:
+    {{- toYaml $w.conditions | nindent 4 }}
+  provider:
+    aws:
+      service: ParameterStore
+      region: {{ $w.region | quote }}
+      role: {{ $w.role | quote }}
+      prefix: {{ $w.prefix | quote }}
 {{- end }}

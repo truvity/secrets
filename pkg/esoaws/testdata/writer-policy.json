@@ -1,0 +1,38 @@
+{
+  "Statement": [
+    {
+      "Action": [
+        "ssm:AddTagsToResource",
+        "ssm:GetParameter",
+        "ssm:ListTagsForResource",
+        "ssm:PutParameter"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:ssm:eu-example-1:111122223333:parameter/app/client/*"
+      ],
+      "Sid": "WriteParameters"
+    },
+    {
+      "Action": [
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "ssm.eu-example-1.amazonaws.com"
+        },
+        "StringLike": {
+          "kms:EncryptionContext:PARAMETER_ARN": [
+            "arn:aws:ssm:eu-example-1:111122223333:parameter/app/client/*"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:kms:eu-example-1:111122223333:key/abcd1234-12ab-34cd-56ef-1234567890ab",
+      "Sid": "EncryptParameters"
+    }
+  ],
+  "Version": "2012-10-17"
+}

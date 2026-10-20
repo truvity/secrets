@@ -285,6 +285,42 @@
         }
       }
     },
+    "awsWriters": {
+      "description": "Writer stores on Parameter Store (podIdentity only): one ClusterSecretStore each, assuming a writer role and pinned to one parameter prefix. The narrow exception to reader-only stores.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "region", "role", "prefix", "conditions"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "region": { "type": "string", "pattern": "^[a-z]{2,}(-[a-z0-9]+)+$" },
+          "role": {
+            "description": "The writer role in the parameters' account: one IAM role ARN, no wildcard.",
+            "type": "string",
+            "pattern": "^arn:aws(-[a-z]+)*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$"
+          },
+          "prefix": {
+            "description": "The one parameter path the store reads and writes: starts and ends with \"/\", no wildcard, at least one segment. A PushSecret's remoteKey is appended to it.",
+            "type": "string",
+            "pattern": "^/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*/$"
+          },
+          "annotations": { "$ref": "#/definitions/stringMap" },
+          "conditions": {
+            "description": "Exactly one entry naming the namespaces (no selector, no regex) that may use the store.",
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["namespaces"],
+              "properties": { "namespaces": { "$ref": "#/definitions/namespaceNames" } }
+            }
+          }
+        }
+      }
+    },
     "pki": {
       "type": "object",
       "additionalProperties": false,

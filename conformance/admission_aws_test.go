@@ -20,12 +20,24 @@ const esoCRDs = "https://raw.githubusercontent.com/external-secrets/external-sec
 const (
 	readerRole = "arn:aws:iam::444455556666:role/a-app-config"
 
+	// The release's one writer store: the narrow exception to reader-only
+	// stores, pinned to its role and its prefix.
+	writerRole   = "arn:aws:iam::444455556666:role/a-eso-app-client-writer"
+	writerPrefix = "/example/app/client/"
+
 	podValues = `aws:
   identity: podIdentity
 awsStores:
   - name: example-app-config
     region: eu-example-1
     role: ` + readerRole + `
+    conditions:
+      - namespaces: [tenant]
+awsWriters:
+  - name: example-app-client-push
+    region: eu-example-1
+    role: ` + writerRole + `
+    prefix: ` + writerPrefix + `
     conditions:
       - namespaces: [tenant]
 `
@@ -43,6 +55,13 @@ awsStores:
   - name: example-app-added
     region: eu-example-1
     role: ` + readerRole + `
+    conditions:
+      - namespaces: [tenant]
+awsWriters:
+  - name: example-app-client-push
+    region: eu-example-1
+    role: ` + writerRole + `
+    prefix: ` + writerPrefix + `
     conditions:
       - namespaces: [tenant]
 `
@@ -287,6 +306,34 @@ func TestAdmissionPolicyAWS(t *testing.T) {
 		{"the release's store with an externalID", "",
 			awsStore("ClusterSecretStore", "example-app-config", withRole("      externalID: x\n")),
 			[]string{"differs from what it renders"}},
+		{"the release's writer store", "",
+			awsStore("ClusterSecretStore", "example-app-client-push", "      role: "+writerRole+"\n      prefix: "+writerPrefix+"\n"), nil},
+		{"the release's writer store with another prefix", "",
+			awsStore("ClusterSecretStore", "example-app-client-push", "      role: "+writerRole+"\n      prefix: /example/other/\n"),
+			[]string{"is release pod's, but differs from what it renders", "a writer store is pinned to exactly the prefix " + writerPrefix}},
+		{"the release's writer store with a wider prefix", "",
+			awsStore("ClusterSecretStore", "example-app-client-push", "      role: "+writerRole+"\n      prefix: /example/\n"),
+			[]string{"a writer store is pinned to exactly the prefix"}},
+		{"the release's writer store with no prefix", "",
+			awsStore("ClusterSecretStore", "example-app-client-push", "      role: "+writerRole+"\n"),
+			[]string{"a writer store is pinned to exactly the prefix"}},
+		{"the release's writer store with the reader's role", "",
+			awsStore("ClusterSecretStore", "example-app-client-push", withRole("      prefix: "+writerPrefix+"\n")),
+			[]string{"assumes exactly " + writerRole}},
+		{"the release's writer store in another region", "",
+			strings.Replace(awsStore("ClusterSecretStore", "example-app-client-push",
+				"      role: "+writerRole+"\n      prefix: "+writerPrefix+"\n"), "eu-example-1", "eu-example-2", 1),
+			[]string{"a writer store is pinned to exactly the prefix"}},
+		{"the release's writer store with sessionTags", "",
+			awsStore("ClusterSecretStore", "example-app-client-push",
+				"      role: "+writerRole+"\n      prefix: "+writerPrefix+"\n      sessionTags: [{key: team, value: a}]\n"),
+			[]string{"differs from what it renders"}},
+		{"a reader store with a prefix", "",
+			awsStore("ClusterSecretStore", "example-app-config", withRole("      prefix: /\n")),
+			[]string{"a reader store carries no prefix"}},
+		{"another writer store, same role and prefix", "",
+			awsStore("ClusterSecretStore", "other-push", "      role: "+writerRole+"\n      prefix: "+writerPrefix+"\n"),
+			[]string{"not one of the stores release pod renders"}},
 		{"another ClusterSecretStore on aws", "", awsStore("ClusterSecretStore", "other", withRole("")),
 			[]string{"ClusterSecretStore other", "not one of the stores release pod renders"}},
 		{"another ClusterSecretStore on aws, even with auth", "", awsStore("ClusterSecretStore", "other-jwt", withRole(jwtAuth)),

@@ -1,0 +1,161 @@
+---
+# Source: openbao-consumers/templates/stores.yaml
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: example-app-config
+spec:
+  conditions:
+    - namespaces:
+      - example-app
+  provider:
+    aws:
+      service: ParameterStore
+      region: "eu-example-1"
+      role: "arn:aws:iam::444455556666:role/a-app-config"
+
+---
+# Source: openbao-consumers/templates/stores.yaml
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: example-app-client-push
+  annotations:
+    example.com/sync-wave: "55"
+spec:
+  conditions:
+    - namespaces:
+      - example-app
+  provider:
+    aws:
+      service: ParameterStore
+      region: "eu-example-1"
+      role: "arn:aws:iam::444455556666:role/a-eso-app-client-writer"
+      prefix: "/example/app/client/"
+
+---
+# Source: openbao-consumers/templates/aws-admission.yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: openbao-consumers-aws-stores
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["external-secrets.io"]
+        apiVersions: ["*"]
+        resources: ["secretstores", "clustersecretstores"]
+        operations: ["CREATE", "UPDATE"]
+      - apiGroups: ["generators.external-secrets.io"]
+        apiVersions: ["*"]
+        resources: ["ecrauthorizationtokens", "stssessiontokens", "clustergenerators"]
+        operations: ["CREATE", "UPDATE"]
+  matchConditions:
+    # An update to an object already being deleted that leaves its spec as
+    # it was (a finalizer's removal) is not judged, so a deletion cannot be
+    # wedged. Every other update is: an object held in deletion by a
+    # finalizer is still read by External Secrets, so a spec change while
+    # it waits is judged like any other.
+    - name: not-a-finalizer-release
+      expression: >-
+        !(request.operation == 'UPDATE' && has(dyn(oldObject).metadata.deletionTimestamp) &&
+        dyn(object).spec == dyn(oldObject).spec)
+  variables:
+    - name: obj
+      expression: 'dyn(object)'
+    - name: kind
+      expression: 'request.kind.kind'
+    # Cluster-scoped kinds have no namespace to name.
+    - name: subject
+      expression: >-
+        variables.kind + ' ' + variables.obj.metadata.name +
+        (variables.kind == 'ClusterSecretStore' || variables.kind == 'ClusterGenerator' ? '' :
+        ' in namespace ' + request.namespace)
+    - name: isStore
+      expression: "variables.kind == 'SecretStore' || variables.kind == 'ClusterSecretStore'"
+    - name: onAWS
+      expression: >-
+        variables.isStore && has(variables.obj.spec.provider) && has(variables.obj.spec.provider.aws)
+    - name: aws
+      expression: "variables.onAWS ? variables.obj.spec.provider.aws : {}"
+    - name: storeOwnAuth
+      expression: "(has(variables.aws.auth) && (has(variables.aws.auth.secretRef) || has(variables.aws.auth.jwt)))"
+    # A generator that would act with the controller's credentials: a
+    # namespaced ECR or STS generator, or a ClusterGenerator wrapping one.
+    - name: generatorBorrows
+      expression: >-
+        (variables.kind == 'ECRAuthorizationToken' || variables.kind == 'STSSessionToken') ?
+        !(has(variables.obj.spec.auth) && (has(variables.obj.spec.auth.secretRef) || has(variables.obj.spec.auth.jwt))) :
+        variables.kind == 'ClusterGenerator' && has(variables.obj.spec.generator) && (
+        (has(variables.obj.spec.generator.ecrAuthorizationTokenSpec) && !(has(variables.obj.spec.generator.ecrAuthorizationTokenSpec.auth) && (has(variables.obj.spec.generator.ecrAuthorizationTokenSpec.auth.secretRef) || has(variables.obj.spec.generator.ecrAuthorizationTokenSpec.auth.jwt)))) ||
+        (has(variables.obj.spec.generator.stsSessionTokenSpec) && !(has(variables.obj.spec.generator.stsSessionTokenSpec.auth) && (has(variables.obj.spec.generator.stsSessionTokenSpec.auth.secretRef) || has(variables.obj.spec.generator.stsSessionTokenSpec.auth.jwt)))))
+    - name: expected
+      expression: '{"example-app-client-push":{"prefix":"/example/app/client/","region":"eu-example-1","role":"arn:aws:iam::444455556666:role/a-eso-app-client-writer"},"example-app-config":{"role":"arn:aws:iam::444455556666:role/a-app-config"}}'
+    - name: releaseStore
+      expression: >-
+        variables.kind == 'ClusterSecretStore' && variables.onAWS && variables.obj.metadata.name in variables.expected
+    # What none of the release's stores says: more roles, a session's tags,
+    # an external id.
+    - name: extras
+      expression: >-
+        has(variables.aws.additionalRoles) || has(variables.aws.sessionTags) ||
+        has(variables.aws.transitiveTagKeys) || has(variables.aws.externalID)
+  validations:
+    - expression: "variables.kind != 'SecretStore' || !variables.onAWS || variables.storeOwnAuth"
+      messageExpression: >-
+        variables.subject + ' is on the aws provider with no auth of its own (secretRef or jwt): External Secrets would use its' +
+        ' controller\'s AWS identity, which may assume this cluster\'s parameter reader roles'
+      reason: Forbidden
+    - expression: "!variables.generatorBorrows"
+      messageExpression: >-
+        variables.subject + ' names no auth of its own (secretRef or jwt) for AWS: External Secrets would use its controller\'s AWS identity'
+      reason: Forbidden
+    - expression: "variables.kind != 'ClusterSecretStore' || !variables.onAWS || variables.releaseStore"
+      messageExpression: >-
+        variables.subject +
+        ' is on the aws provider but is not one of the stores release openbao-consumers renders (awsStores):' +
+        ' every namespace its conditions admit would read with the controller\'s AWS identity'
+      reason: Forbidden
+    # podIdentity: the release's store reads as the controller, assuming its
+    # one rendered role and nothing else.
+    - expression: >-
+        !variables.releaseStore || (!variables.extras && !has(variables.aws.auth) &&
+        has(variables.aws.role) && variables.aws.role == variables.expected[variables.obj.metadata.name].role)
+      messageExpression: >-
+        variables.subject + ' is release openbao-consumers\'s, but differs from what it renders: it assumes exactly ' +
+        variables.expected[variables.obj.metadata.name].role +
+        ', with no auth, additionalRoles, sessionTags, transitiveTagKeys or externalID'
+      reason: Forbidden
+    # A reader store carries no prefix (the chart renders none), and a writer
+    # store carries exactly its rendered one, in its rendered region, on the
+    # Parameter Store service: the path a writer role is scoped to is the path
+    # its store is pinned to.
+    - expression: >-
+        !variables.releaseStore || ('prefix' in variables.expected[variables.obj.metadata.name] ?
+        (has(variables.aws.prefix) && variables.aws.prefix == variables.expected[variables.obj.metadata.name].prefix &&
+        has(variables.aws.region) && variables.aws.region == variables.expected[variables.obj.metadata.name].region &&
+        has(variables.aws.service) && variables.aws.service == 'ParameterStore') :
+        !has(variables.aws.prefix))
+      messageExpression: >-
+        variables.subject + ' is release openbao-consumers\'s, but differs from what it renders: ' +
+        ('prefix' in variables.expected[variables.obj.metadata.name] ?
+        'a writer store is pinned to exactly the prefix ' + variables.expected[variables.obj.metadata.name].prefix +
+        ' in region ' + variables.expected[variables.obj.metadata.name].region + ' on Parameter Store' :
+        'a reader store carries no prefix')
+      reason: Forbidden
+
+---
+# Source: openbao-consumers/templates/aws-admission.yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: openbao-consumers-aws-stores
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  policyName: openbao-consumers-aws-stores
+  validationActions:
+    - Deny

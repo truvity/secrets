@@ -136,6 +136,23 @@ awsStores: []
 #                                # eks.amazonaws.com/role-arn: <role>
 #      annotations: {}
 
+# Writer stores on Parameter Store: the narrow exception to "the stores are
+# readers". PodIdentity mode only. A writer store is a ClusterSecretStore that
+# assumes a WRITER role (esoaws NewWriters) and is meant for PushSecrets: the
+# role may write, and read, only the parameters under `prefix`, and the store
+# pins the same prefix, so a PushSecret's remoteKey is relative to it. The
+# admission policy admits exactly the writer stores listed here, pinned to
+# their role, region and prefix, and no other. Each is usable from the one
+# namespace it names. The role must not be a reader's (an awsStores role).
+awsWriters: []
+#  - name: example-app-client-push
+#    region: eu-example-1
+#    role: arn:aws:iam::444455556666:role/a-eso-app-client-writer
+#    prefix: /example/app/client/       # starts and ends with "/"
+#    annotations: {}
+#    conditions:                        # exactly one entry, one or more namespace names
+#      - namespaces: [example-app]
+
 pki:
   enabled: false
   # On the objects cert-manager's login is made of (the ServiceAccount, its

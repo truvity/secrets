@@ -1,0 +1,10 @@
+# A prefix without its closing slash would let a remoteKey extend a name.
+aws:
+  identity: podIdentity
+
+awsWriters:
+  - name: app-push
+    region: eu-example-1
+    role: arn:aws:iam::444455556666:role/a-writer
+    prefix: /app/client
+    conditions: [{namespaces: [app]}]
