@@ -96,6 +96,12 @@ what consumers read:
 | `opts.DomainCSROutputs[domain]` | each trust domain's intermediate request, for the root ceremony |
 | `opts.EnvironmentCSROutput` | every identity environment CA's request, by environment, whichever phase it is in |
 
+The stack exports no trust root: the self-signed chain that once had one
+(`trustRootCaPem`) is gone (v0.44.0), and what a relying party trusts is the
+contract's root and its committed chains. `ConfigOutputs.TrustRootCAPEM`
+stays only so that committed outputs files still parse; the stack does not
+write it.
+
 An External issuer's chain is THE COMMITTED ARTIFACT, never a fresh
 signature: `opts.Chains` loads it from where the ceremony committed it and
 re-proves it against the contract before the server is touched

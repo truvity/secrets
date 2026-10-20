@@ -1,9 +1,9 @@
 # secrets
 
-The secrets concern for Kubernetes estates, starting with OpenBAO. OpenBAO for Kubernetes estates, as reusable mechanism: the two halves the
-upstream server chart leaves out, the desired state of OpenBAO's own
-configuration and its apply, and the KMS-rooted CA ceremony its PKI hangs
-from.
+The secrets concern for Kubernetes estates, starting with OpenBAO, as
+reusable mechanism: the two halves the upstream server chart leaves out, the
+desired state of OpenBAO's own configuration and its apply, and the
+KMS-rooted CA ceremony its PKI hangs from.
 
 ## The secrets concern
 
@@ -258,7 +258,7 @@ For the ceremony, a hierarchy file (or a `pkg/pki` contract, `--contract`; see
 ([docs/ceremony.md](docs/ceremony.md) walks through all of them):
 
 ```sh
-go install github.com/truvity/openbao/cmd/openbaoctl@v0.20.0  # or the release archive
+go install github.com/truvity/secrets/cmd/openbaoctl@latest  # or the release archive; pin a version
 openbaoctl pki sign-intermediate --hierarchy pki.yaml --trust-domain private \
   --csr private.csr --print-template                         # no credential; prints the hash
 openbaoctl pki sign-intermediate --hierarchy pki.yaml --trust-domain private \
@@ -281,7 +281,7 @@ _, err := custody.Deploy(ctx, custody.Args{
 
 | Consumer | Surface |
 |---|---|
-| truvity/gitops | Go `model`, `apply`, `ceremony`, `custody`; charts `openbao-ops`, `openbao-consumers` |
+| the maintainers' estate deployment repository (private) | Go `model`, `apply`, `ceremony`, `custody`; charts `openbao-ops`, `openbao-consumers` |
 
 This is the one production consumer. The library is AWS-only where it
 touches a key (see Status); it does not serve an estate on another cloud.
@@ -411,10 +411,11 @@ chart's own `version` field is a placeholder that never moves — and the
 tag is the Go module's version.
 
 The first release is a manual tag: auto-release never cuts one. It is
-present but not armed (`vars.AUTO_RELEASE` is unset); when armed it cuts
-**patches only** — at once for a merged `security`-labelled pull request,
-weekly for dependency bumps. Minors and majors are always manual, tagged
-when the change merges and after its CHANGELOG heading.
+doubly guarded and acts only where the `AUTO_RELEASE` variable is `true`
+for the repository; then it cuts **patches only** — at once for a merged
+`security`-labelled pull request, weekly for dependency bumps. A version
+with no CHANGELOG heading is such a patch. Minors and majors are always
+manual, tagged when the change merges and after its CHANGELOG heading.
 
 ## Licence
 
