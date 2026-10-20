@@ -545,14 +545,14 @@ check's scratch server installs the same plugin the same way, from the values
 
 **Date:** 2026-10-09. **Status:** accepted; supersedes [T-22](#t-22-storage-credentials-come-from-a-broker).
 
-**Choice.** Short-lived R2 credentials come from the Cloudflare module of the access issuer
-(sluis): a **preset** names a disabled prototype token, and the issuer clones it into an
+**Choice.** Short-lived R2 credentials come from the Cloudflare module of the access issuer:
+a **preset** names a disabled prototype token, and the issuer clones it into an
 expiring token for an identity its grants allow. A person or a CI job asks for one with
 `sluisctl cloudflare r2 <preset>` (an AWS `credential_process` answer). A workload that
 needs one gets it through the secret plane's ordinary delivery: the issuer writes the
 preset's credential to a parameter store, and External Secrets Operator syncs it into a
-Kubernetes Secret. The R2 credentials broker is retired: the Cloudflare module removed
-it in edge v2.19.0.
+Kubernetes Secret. The R2 credentials broker is retired: the Cloudflare module has
+removed it.
 
 **Why it was reversed.** No storage consumer was left on the broker, and the issuer's
 Cloudflare presets mint short-lived Cloudflare credentials from prototypes anyway, so a
