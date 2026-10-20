@@ -17,7 +17,8 @@ contract cannot know, into every domain intermediate, issuing CA, leaf role
 and credential role an estate serves -- with the mount, issuer and role
 names a deployed estate is already registered under ([Deriving the desired
 state](#deriving-the-desired-state)). An estate needs no PKI logic of its
-own beside the contract file and its own legacy state.
+own beside the contract file and the few facts it supplies (and, for an
+estate that adopts existing state, the names that state holds).
 
 Nothing in `pkg/pki` signs anything or holds a credential. A program that
 already has its own contract shape can skip this package and build those
