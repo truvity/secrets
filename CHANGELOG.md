@@ -7,6 +7,12 @@ from v0.2.0 on the Go module and `openbaoctl` with them.
 
 ## Unreleased
 
+## v0.46.1
+
+### Fixed
+
+- **`pkg/model`: a policy rule whose path starts with `/` is refused.** `Rule.Validate` now rejects `/*`, `/+/kv/*` and `/kv/data/*`. OpenBAO strips the leading slash before it matches, so `/*` behaves as `*`, and the project breadth check read its empty first segment as harmless. An estate that declared such a rule fails validation until the rule drops the slash; `kv/data/*` and `wallet/kv/data/*` are unchanged.
+
 ## v0.46.0
 
 ### Changed

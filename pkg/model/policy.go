@@ -83,7 +83,8 @@ func (p *Policy) Validate() error {
 }
 
 // Validate refuses a stanza that grants no capability or one OpenBAO does
-// not know, and one whose path climbs out of wherever it is declared.
+// not know, one whose path climbs out of wherever it is declared, and one
+// whose path starts with a slash.
 func (r *Rule) Validate() error {
 	if strings.TrimSpace(r.Path) == "" {
 		return fmt.Errorf("a rule has no path")
@@ -91,6 +92,13 @@ func (r *Rule) Validate() error {
 
 	if strings.Contains(r.Path, "..") {
 		return fmt.Errorf("rule path %q traverses upwards", r.Path)
+	}
+
+	// OpenBAO strips a leading slash from a policy path before it matches,
+	// so `/*` behaves as `*`: a rule whose first segment is empty would pass
+	// the project breadth check while still reaching every namespace.
+	if strings.HasPrefix(r.Path, "/") {
+		return fmt.Errorf("rule path %q starts with a slash, which OpenBAO strips before it matches", r.Path)
 	}
 
 	if strings.ContainsAny(r.Path, "\"\n") {

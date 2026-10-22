@@ -665,3 +665,25 @@ func TestJWTMountKeySources(t *testing.T) {
 	m.BoundIssuer = "https://iss.example.org"
 	assert.Equal(t, "https://iss.example.org", m.EffectiveBoundIssuer())
 }
+
+// TestRuleRefusesLeadingSlash pins that a policy path starting with a slash
+// is refused wherever a rule is validated. OpenBAO strips the slash, so `/*`
+// would otherwise pass the first-segment breadth check and reach every
+// project while reading as an empty segment.
+func TestRuleRefusesLeadingSlash(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{"/*", "/+/kv/*", "/kv/data/*"} {
+		rule := model.Rule{Path: path, Capabilities: []string{model.CapRead}}
+		if err := rule.Validate(); err == nil || !strings.Contains(err.Error(), "starts with a slash") {
+			t.Errorf("rule %q: want a leading-slash refusal, got %v", path, err)
+		}
+	}
+
+	for _, path := range []string{"kv/data/*", "wallet/kv/data/*"} {
+		rule := model.Rule{Path: path, Capabilities: []string{model.CapRead}}
+		if err := rule.Validate(); err != nil {
+			t.Errorf("rule %q: want accepted, got %v", path, err)
+		}
+	}
+}
