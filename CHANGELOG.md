@@ -7,6 +7,10 @@ from v0.2.0 on the Go module and `openbaoctl` with them.
 
 ## Unreleased
 
+## v0.45.1
+
+- Dependency updates.
+
 ## v0.46.0
 
 ### Changed
