@@ -42,9 +42,10 @@ Each `Cluster` is one namespace, named after the cluster:
 | `Projects`, `ProjectSecrets`, `ProjectViewers` | grants for each project's deployer and approver groups (write) and viewer group (read), each admitted only if `Groups.Holds` says so; project namespaces where `ProjectNamespaces` names the environment |
 | `CISecrets` | in the management namespace only: one read-only policy per path, refusing a path a writer, exporter, the service or the restore canary owns |
 
-The environment's writer group reaches everything; its database client
-group and every project's DBA group sign on the private domain's
-`PKI.DBClientRole`.
+The environment's writer group reaches the environment's shared KV mount and
+no project's own namespace (a project's namespace is reached by the project's
+deployer, approver and viewer groups, and by the installation's operators); its database client group and every
+project's DBA group sign on the private domain's `PKI.DBClientRole`.
 
 ## Root
 

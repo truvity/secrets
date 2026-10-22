@@ -7,6 +7,12 @@ from v0.2.0 on the Go module and `openbaoctl` with them.
 
 ## Unreleased
 
+## v0.46.0
+
+### Changed
+
+- **Breaking (`pkg/estate`): the environment's writer group no longer reaches any project's own namespace.** The group (`Groups.Writer`, `{env}:{OpenBAO}:{Writer}`) is the environment's administrators, a population far wider than one project's team, yet its policy carried the data and metadata rules of every project namespace the environment declares (`ProjectNamespaces`), so every administrator could read and write every team's secrets. It now writes the environment's shared KV mount alone (`builder.Write("")`, not `builder.All()`). A project's namespace is reached by the project's own deployer, approver and viewer groups (each admitted by `Groups.Holds`) and by the installation's operators from root. Adoption step: an estate that relied on the writer group for a project namespace must give that project a deployer, approver or viewer group that `Groups.Holds` admits before taking this version; the next apply drops the project rules from the writer policy. `builder.All()` and `OpAll` are unchanged for other callers.
+
 ## v0.45.0
 
 ### Added

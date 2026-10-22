@@ -512,8 +512,12 @@ func credentialSign(in *Inputs, desired *Desired, env, role string) (builder.Cla
 
 // groupGrants are the groups people hold in one environment.
 //
-// The writer reaches everything, every project's own namespace included.
-// A project's own prefix is reached by three roles: deployers and approvers
+// The writer reaches the environment's shared mount, and no project's own
+// namespace: the environment writer group is the environment's
+// administrators, a population far wider than any one project's team, so a
+// project's namespace stays with the project's own three roles (and the
+// installation's operators, who reach every namespace from the root). A
+// project's own prefix is reached by three roles: deployers and approvers
 // write it; a viewer reads it. Each is checked against Groups.Holds, the
 // predicate the identity provider admits the group by, so the two cannot
 // drift apart; a project with a namespace of its own is addressed there.
@@ -530,7 +534,7 @@ func credentialSign(in *Inputs, desired *Desired, env, role string) (builder.Cla
 // group grant. They do not depend on the DBA group.
 func groupGrants(in *Inputs, env string, dbClient builder.Clause, signs func(role string) (builder.Clause, bool)) []builder.Grant {
 	groups := &in.Groups
-	grants := []builder.Grant{{Name: groups.Name(env, groups.OpenBAO, groups.Writer), Access: builder.Access{builder.All()}}}
+	grants := []builder.Grant{{Name: groups.Name(env, groups.OpenBAO, groups.Writer), Access: builder.Access{builder.Write("")}}}
 
 	for _, project := range projectsIn(mergeScopes(in.Projects, in.ProjectSecrets), env) {
 		for _, role := range []struct {

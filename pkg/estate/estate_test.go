@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
@@ -143,5 +144,69 @@ func TestStoreAccess(t *testing.T) {
 
 	if got := in.StoreAccess("platform"); len(got) != 1 || got[0].Op != builder.OpKey {
 		t.Errorf("platform access = %+v, want one key", got)
+	}
+}
+
+// The environment's writer group is the environment's administrators, far
+// wider than any project's team: it writes the shared mount and reaches no
+// project's own namespace, which the project's three roles alone (and the
+// operators, from root) reach.
+func TestWriterGroupReachesNoProjectNamespace(t *testing.T) {
+	desired, err := estate.Build(example.Inputs(t, "testdata/contract.yaml"))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	state, err := desired.Model()
+	if err != nil {
+		t.Fatalf("model: %v", err)
+	}
+
+	var checked bool
+
+	for i := range state.Namespaces {
+		namespace := &state.Namespaces[i]
+
+		for j := range namespace.Policies {
+			policy := &namespace.Policies[j]
+			if !strings.HasSuffix(policy.Name, ":openbao:writer") {
+				continue
+			}
+
+			checked = true
+
+			for _, rule := range policy.Rules {
+				for _, project := range []string{"shop/", "team/"} {
+					if strings.HasPrefix(rule.Path, project) {
+						t.Errorf("%s: %s reaches a project namespace at %q", namespace.Name, policy.Name, rule.Path)
+					}
+				}
+			}
+		}
+	}
+
+	if !checked {
+		t.Fatal("no writer policy found; the test checks nothing")
+	}
+
+	// The projects' own groups still reach their namespaces.
+	var shopWriters int
+
+	for i := range state.Namespaces {
+		for _, policy := range state.Namespaces[i].Policies {
+			if policy.Name != "alpha:shop:deployer" {
+				continue
+			}
+
+			for _, rule := range policy.Rules {
+				if strings.HasPrefix(rule.Path, "shop/kv/data/") {
+					shopWriters++
+				}
+			}
+		}
+	}
+
+	if shopWriters == 0 {
+		t.Error("the project's own deployer reaches no namespace data path")
 	}
 }
