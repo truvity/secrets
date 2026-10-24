@@ -55,7 +55,7 @@ func matches(t *testing.T, ms []door.Match, r request) bool {
 			continue
 		}
 
-		if m.RequireToken && !(r.hasToken && regexp.MustCompile("^(?:"+door.TokenPattern+")$").MatchString(r.token)) {
+		if m.RequireToken && (!r.hasToken || !regexp.MustCompile("^(?:"+door.TokenPattern+")$").MatchString(r.token)) {
 			continue
 		}
 
