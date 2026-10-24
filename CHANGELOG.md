@@ -7,6 +7,11 @@ from v0.2.0 on the Go module and `openbaoctl` with them.
 
 ## Unreleased
 
+### Added
+
+- **`pkg/door`: the path allow-list of an OpenBAO server's public door.** `door.New(namespaces, door.Mounts{KV, Issuing, SSH})` returns `Paths` whose `Login()`, `Data()` and `Console()` give gateway-neutral `Match` rows (a full-string RE2 path pattern, a method, and a token-header flag; `door.RequireToken` sets the flag). A consumer turns them into its own gateway routes and keeps which hosts and clusters get a door. Everything not listed matches nothing (no `sys/generate-root`, `sys/rekey`, `sys/seal`, `auth/token/create`, other mounts), a namespace may be in the path or in `X-Vault-Namespace`, and percent signs, dot segments and hidden names are refused. The API set (login plus token-bearing data) and the console set never overlap on one host; the tests hold both to a table of browser and CLI requests and to the cross product of methods and token header.
+- **`pkg/serverpreset`: `WithForwardedFor(hcl, authorized, hopSkips)`.** Adds the `x_forwarded_for_*` settings to the API listener of a rendered server config (never the metrics listener), so a server behind a proxy chain audits the caller and not the last proxy pod. The reject flags are fixed at `false` (a request without the header, or from outside the range, is served, not answered 400); an empty range list, a host address instead of a network address, a non-positive hop count and a config whose first listener is not the API listener are refused.
+
 ## v0.46.1
 
 ### Fixed
