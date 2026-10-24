@@ -80,12 +80,15 @@ func TestWithForwardedForRefuses(t *testing.T) {
 		hops int
 		want string
 	}{
-		"no range":              {forwardedForHCL, nil, 1, "no address range"},
-		"no hops":               {forwardedForHCL, forwardedForRanges, 0, "hop_skips"},
-		"a host address":        {forwardedForHCL, []string{"10.64.32.5/19"}, 1, "not a network address"},
-		"not a CIDR":            {forwardedForHCL, []string{"10.20.32.0"}, 1, "not a network address"},
-		"no listener":           {"ui = true\n", forwardedForRanges, 1, "no listener"},
-		"already set":           {strings.Replace(forwardedForHCL, `tls_key_file    = "/c/tls.key"`, "x_forwarded_for_hop_skips = 2", 1), forwardedForRanges, 1, "not the API listener"},
+		"no range":       {forwardedForHCL, nil, 1, "no address range"},
+		"no hops":        {forwardedForHCL, forwardedForRanges, 0, "hop_skips"},
+		"a host address": {forwardedForHCL, []string{"10.64.32.5/19"}, 1, "not a network address"},
+		"not a CIDR":     {forwardedForHCL, []string{"10.20.32.0"}, 1, "not a network address"},
+		"no listener":    {"ui = true\n", forwardedForRanges, 1, "no listener"},
+		"already set": {
+			strings.Replace(forwardedForHCL, `tls_key_file    = "/c/tls.key"`, "x_forwarded_for_hop_skips = 2", 1),
+			forwardedForRanges, 1, "not the API listener",
+		},
 		"the metrics one first": {strings.Replace(forwardedForHCL, "cluster_address", "address2", 1), forwardedForRanges, 1, "not the API listener"},
 	} {
 		t.Run(name, func(t *testing.T) {
