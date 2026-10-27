@@ -3,7 +3,7 @@
   "extends": [
     "github>truvity/ci-workflows"
   ],
-  "description": "Overrides beyond the shared preset: automerge, lockfile maintenance, the ignorePaths and vulnerability-alert defaults common to every repository built from this component template. The packageRules entry documents its own exception.",
+  "description": "Overrides beyond the shared preset: automerge, the ignorePaths and vulnerability-alert defaults common to every repository built from this component template. The packageRules entry documents its own exception.",
   "osvVulnerabilityAlerts": true,
   "labels": [
     "dependencies"
@@ -12,12 +12,6 @@
   "automergeType": "pr",
   "automergeStrategy": "rebase",
   "platformAutomerge": true,
-  "lockFileMaintenance": {
-    "enabled": true,
-    "schedule": [
-      "before 6am"
-    ]
-  },
   "ignorePaths": [
     "tests/**"
   ],
