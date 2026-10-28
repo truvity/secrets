@@ -39,12 +39,12 @@ func TestSecureStringKeyPolicy(t *testing.T) {
 	golden(t, "secure-string-key-policy.json", doc)
 
 	var parsed struct {
-		Id        string
+		ID        string `json:"Id"`
 		Statement []map[string]any
 	}
 
 	require.NoError(t, json.Unmarshal([]byte(doc), &parsed))
-	assert.Equal(t, "app-client-key", parsed.Id)
+	assert.Equal(t, "app-client-key", parsed.ID)
 
 	var sids []string
 	for _, st := range parsed.Statement {
