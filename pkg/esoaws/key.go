@@ -10,6 +10,11 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
 
+// recoveryKMSActions are the recovery role's actions, the writer's three in the
+// order estates have rendered them since before this builder (a key policy's
+// text is a Pulumi input, so its order is part of the contract).
+var recoveryKMSActions = []string{"kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"}
+
 // maxKeyPolicyBytes is KMS's limit on a key policy document.
 const maxKeyPolicyBytes = 32768
 
@@ -198,7 +203,7 @@ func SecureStringKeyPolicy(args SecureStringKeyArgs) (string, error) {
 
 	if args.Recovery != "" {
 		statements = append(statements,
-			narrowed("BreakglassRecovers", args.Recovery, writerKMSActions, args.RecoveryParameters))
+			narrowed("BreakglassRecovers", args.Recovery, recoveryKMSActions, args.RecoveryParameters))
 	}
 
 	return keyPolicyDocument(args.PolicyID, statements)
