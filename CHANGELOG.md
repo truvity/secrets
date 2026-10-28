@@ -5,6 +5,12 @@ heading here is a patch cut automatically for dependency bumps alone; its
 GitHub Release lists them. Both charts are released at every version, and
 from v0.2.0 on the Go module and `openbaoctl` with them.
 
+## Unreleased
+
+### Fixed
+
+- **`pkg/esoaws`: `SecureStringKeyPolicy` lists the recovery role's actions as Encrypt, Decrypt, GenerateDataKey.** v0.47.0 listed Decrypt first, which changes the text of a key policy an estate already renders in the other order; the set of actions is unchanged.
+
 ## v0.47.0
 
 ### Added

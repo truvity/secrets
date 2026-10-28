@@ -89,8 +89,8 @@
     },
     {
       "Action": [
-        "kms:Decrypt",
         "kms:Encrypt",
+        "kms:Decrypt",
         "kms:GenerateDataKey"
       ],
       "Condition": {
