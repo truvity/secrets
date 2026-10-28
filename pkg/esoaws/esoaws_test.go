@@ -57,6 +57,8 @@ func (r *recorder) NewResource(args pulumi.MockResourceArgs) (string, resource.P
 	switch args.TypeToken {
 	case KindIAMRole:
 		state["arn"] = resource.NewProperty("arn:aws:iam::mock:role/" + args.Name)
+	case "aws:kms/key:Key":
+		state["arn"] = resource.NewProperty(writerKeyARN)
 	case KindOIDCProvider:
 		state["arn"] = resource.NewProperty("arn:aws:iam::mock:oidc-provider/" + args.Name)
 	}

@@ -303,7 +303,15 @@ and they are built to stay one:
   which is why a reader of a *secret* written here must be named in the
   key's policy. `WriterKeyPolicyStatement` is the writer's statement for
   that policy, in the shape the account root narrowed by `aws:PrincipalArn`
-  takes.
+  takes. `NewSecureStringKey` builds the whole of it: the key (30-day
+  deletion window, rotation, protected), its alias, the writer role, and a
+  key policy of key administration for the account root (no cryptographic
+  action), the writer, the named readers (`KeyReader`: a role ARN pattern and
+  the parameters it decrypts, or a ready-made statement from a library that
+  owns the reader's half) and a recovery role. `SecureStringKeyPolicy`
+  renders the document alone. Writers built apart by one estate are held to
+  each other by `CheckWriterClaims` (one role and one prefix per claim, no
+  prefix inside another's).
 - **The same trust as a reader.** Only the cluster identity role
   (`NewClusterIdentity`; add the writer role to its `SourceRoles`), for
   `sts:AssumeRole` and Pod Identity's tag keys.
