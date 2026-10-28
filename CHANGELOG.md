@@ -5,6 +5,13 @@ heading here is a patch cut automatically for dependency bumps alone; its
 GitHub Release lists them. Both charts are released at every version, and
 from v0.2.0 on the Go module and `openbaoctl` with them.
 
+## Unreleased
+
+### Added
+
+- **`pkg/esoaws`: `NewSecureStringKey`, one builder for a SecureString KMS key with External Secrets writers and named readers.** It makes the customer-managed key (30-day deletion window, rotation on, protected), its alias, and the writer role (`NewWriters`), under one key policy: key administration for the account root, the writer's statement (`WriterKeyPolicyStatement`), the named readers (`KeyReader`: a role ARN pattern and its parameters, or a ready-made `ReaderStatements` entry from a library that owns the reader's half), and an optional recovery role. `SecureStringKeyPolicy` renders the document alone, and `KeyAdministrationActions` is the administration action list. A Sid that appears twice, a nameless statement and a document over KMS's limit are refused before anything is registered.
+- **`pkg/esoaws`: `CheckWriterClaims` and `ValidRoleName`.** An estate that builds one writer per component holds the writers to each other: a role IAM does not take, a prefix that is not one hierarchical path, a role or prefix claimed twice in one scope, and a prefix inside another's are all refused together.
+
 ## v0.46.3
 
 - Dependency updates.

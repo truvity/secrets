@@ -56,6 +56,10 @@
 //	  aws:iam/role:Role                                          <grant>
 //	  aws:iam/rolePolicy:RolePolicy                              <grant>-policy
 //
+//	NewSecureStringKey  aws:kms/key:Key                         <Name>
+//	                    aws:kms/alias:Alias                     <Name>
+//	                    NewWriters                              <Writers.Name>
+//
 // NewWriters is the narrow exception to "the stores read": one writer role
 // per grant, on one parameter prefix and one customer-managed key, trusted by
 // a PodIdentity cluster's controller identity alone (docs/esoaws.md#writer-stores-the-narrow-exception).

@@ -1,0 +1,118 @@
+{
+  "Id": "app-client-key",
+  "Statement": [
+    {
+      "Action": [
+        "kms:CreateAlias",
+        "kms:DeleteAlias",
+        "kms:UpdateAlias",
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:GetKeyRotationStatus",
+        "kms:ListAliases",
+        "kms:ListGrants",
+        "kms:ListKeyPolicies",
+        "kms:ListResourceTags",
+        "kms:PutKeyPolicy",
+        "kms:UpdateKeyDescription",
+        "kms:EnableKey",
+        "kms:DisableKey",
+        "kms:EnableKeyRotation",
+        "kms:DisableKeyRotation",
+        "kms:RotateKeyOnDemand",
+        "kms:TagResource",
+        "kms:UntagResource",
+        "kms:ScheduleKeyDeletion",
+        "kms:CancelKeyDeletion"
+      ],
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111122223333:root"
+      },
+      "Resource": "*",
+      "Sid": "KeyAdministration"
+    },
+    {
+      "Action": [
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Condition": {
+        "ArnEquals": {
+          "aws:PrincipalArn": "arn:aws:iam::111122223333:role/a-eso-app-client-writer"
+        },
+        "StringEquals": {
+          "kms:ViaService": "ssm.eu-example-1.amazonaws.com"
+        },
+        "StringLike": {
+          "kms:EncryptionContext:PARAMETER_ARN": [
+            "arn:aws:ssm:eu-example-1:111122223333:parameter/app/client/*"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111122223333:root"
+      },
+      "Resource": "*",
+      "Sid": "ExternalSecretsWriterAEsoAppClientWriter"
+    },
+    {
+      "Action": [
+        "kms:Decrypt"
+      ],
+      "Condition": {
+        "ArnLike": {
+          "aws:PrincipalArn": "arn:aws:iam::111122223333:role/task-*"
+        },
+        "StringEquals": {
+          "kms:ViaService": "ssm.eu-example-1.amazonaws.com"
+        },
+        "StringLike": {
+          "kms:EncryptionContext:PARAMETER_ARN": [
+            "arn:aws:ssm:eu-example-1:111122223333:parameter/app/client/ca",
+            "arn:aws:ssm:eu-example-1:111122223333:parameter/app/client/cert"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111122223333:root"
+      },
+      "Resource": "*",
+      "Sid": "TaskRolesDecryptTheClientCredential"
+    },
+    {
+      "Effect": "Allow",
+      "Sid": "Prebuilt"
+    },
+    {
+      "Action": [
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Condition": {
+        "ArnLike": {
+          "aws:PrincipalArn": "arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_recovery_*"
+        },
+        "StringEquals": {
+          "kms:ViaService": "ssm.eu-example-1.amazonaws.com"
+        },
+        "StringLike": {
+          "kms:EncryptionContext:PARAMETER_ARN": [
+            "arn:aws:ssm:eu-example-1:111122223333:parameter/app/client/*"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111122223333:root"
+      },
+      "Resource": "*",
+      "Sid": "BreakglassRecovers"
+    }
+  ],
+  "Version": "2012-10-17"
+}
