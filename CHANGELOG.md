@@ -5,6 +5,13 @@ heading here is a patch cut automatically for dependency bumps alone; its
 GitHub Release lists them. Both charts are released at every version, and
 from v0.2.0 on the Go module and `openbaoctl` with them.
 
+## v0.48.0
+
+### Added
+
+- **`pkg/custody`: `BreakGlassPrincipalARNPattern`, a Deny of the destructive key actions for everyone but break-glass.** When set, every root key policy ends in `DenyDestructiveExceptBreakGlass`: `ScheduleKeyDeletion`, `DisableKey`, `PutKeyPolicy`, `CreateGrant` and `ImportKeyMaterial` (`BreakGlassOnlyActions()`) are refused to every principal whose ARN does not match the pattern, the account root and both custody roles included, and the administration statements no longer allow `DisableKey`. The keys are created with the policy lockout safety check bypassed; a later key policy change is a break-glass act followed by a refresh, not an apply. The pattern must be a role in the custody account other than the trusted administrators'. Unset, the policies are unchanged.
+- **`pkg/custody`: `CeremonyTrustConditions`, further conditions on the ceremony role's trust.** Each `TrustCondition` is an operator, a key and its values, added beside the trusted principal pattern; the admin role's trust is unchanged. Incomplete conditions, a pair given twice and the module's own `ArnLike` on `aws:PrincipalArn` are refused. Unset, the trust is unchanged.
+
 ## v0.47.2
 
 - Dependency updates.

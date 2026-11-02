@@ -3,6 +3,7 @@ package custody
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -155,6 +156,7 @@ func TestKeyPolicySeparatesRecoveryAdministrationAndCeremony(t *testing.T) {
 		testPattern,
 		"arn:aws:iam::111122223333:role/private-pki-root-admin",
 		"arn:aws:iam::111122223333:role/private-pki-root-ceremony",
+		policyOptions{},
 	)
 	require.NoError(t, err)
 
@@ -188,7 +190,7 @@ func TestKeyPolicySeparatesRecoveryAdministrationAndCeremony(t *testing.T) {
 }
 
 func TestPoliciesComposeArnsInTheGivenPartition(t *testing.T) {
-	policy, err := keyPolicy("aws-us-gov", testAccount, testPattern, "admin", "ceremony")
+	policy, err := keyPolicy("aws-us-gov", testAccount, testPattern, "admin", "ceremony", policyOptions{})
 	require.NoError(t, err)
 	assert.Contains(t, policy, `"arn:aws-us-gov:iam::111122223333:root"`)
 
@@ -462,4 +464,188 @@ func TestDeployWithoutAReplicaRegionCreatesThePrimaryAlone(t *testing.T) {
 	require.Len(t, resources["aws:sns/topic:Topic"], 1)
 	require.Len(t, resources["aws:cloudwatch/metricAlarm:MetricAlarm"], 1)
 	require.Len(t, resources["pulumi:providers:aws"], 2, "the roles and the one region")
+}
+
+const testBreakGlass = "arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_break-glass_*"
+
+func policyStatements(t *testing.T, policy string) map[string]map[string]any {
+	t.Helper()
+	var document struct {
+		Statement []map[string]any `json:"Statement"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(policy), &document))
+	statements := map[string]map[string]any{}
+	for _, statement := range document.Statement {
+		sid, _ := statement[policySidKey].(string)
+		require.NotContains(t, statements, sid, "a Sid appears twice")
+		statements[sid] = statement
+	}
+	return statements
+}
+
+func actionsOf(t *testing.T, statement map[string]any) []string {
+	t.Helper()
+	switch action := statement[policyActionKey].(type) {
+	case string:
+		return []string{action}
+	case []any:
+		actions := make([]string, 0, len(action))
+		for _, item := range action {
+			actions = append(actions, item.(string))
+		}
+		return actions
+	default:
+		t.Fatalf("unexpected Action %#v", action)
+		return nil
+	}
+}
+
+// Without the option the policy is the five statements it always was: an
+// estate that upgrades without setting it previews no change.
+func TestKeyPolicyHasNoDenyWithoutABreakGlassPattern(t *testing.T) {
+	policy, err := keyPolicy(DefaultPartition, testAccount, testPattern, "admin", "ceremony", policyOptions{})
+	require.NoError(t, err)
+	assert.NotContains(t, policy, policyDeny)
+	assert.NotContains(t, policyStatements(t, policy), "DenyDestructiveExceptBreakGlass")
+	assert.Contains(t, actionsOf(t, policyStatements(t, policy)["KeyAdministrationWithoutSigningOrDeletion"]), "kms:DisableKey")
+}
+
+func TestKeyPolicyDeniesTheDestructiveActionsToAllButBreakGlass(t *testing.T) {
+	policy, err := keyPolicy(DefaultPartition, testAccount, testPattern,
+		"arn:aws:iam::111122223333:role/private-pki-root-admin",
+		"arn:aws:iam::111122223333:role/private-pki-root-ceremony",
+		policyOptions{breakGlassPrincipalARNPattern: testBreakGlass},
+	)
+	require.NoError(t, err)
+	statements := policyStatements(t, policy)
+	require.Len(t, statements, 6)
+
+	deny := statements["DenyDestructiveExceptBreakGlass"]
+	require.NotNil(t, deny)
+	assert.Equal(t, policyDeny, deny[policyEffectKey])
+	assert.Equal(t, map[string]any{policyAWSKey: "*"}, deny[policyPrincipalKey], "every principal, the account root included")
+	assert.Equal(t, "*", deny[policyResourceKey])
+	assert.ElementsMatch(t, []string{
+		"kms:ScheduleKeyDeletion", "kms:DisableKey", "kms:PutKeyPolicy", "kms:CreateGrant", "kms:ImportKeyMaterial",
+	}, actionsOf(t, deny))
+	assert.Equal(t, BreakGlassOnlyActions(), actionsOf(t, deny))
+	assert.Equal(t, map[string]any{
+		policyArnNotLikeKey: map[string]any{policyPrincipalARNKey: testBreakGlass},
+	}, deny[policyConditionKey])
+
+	// The administration no longer lists what the Deny refuses; the rest of
+	// it is unchanged.
+	for _, sid := range []string{"KeyAdministrationWithoutSigningOrDeletion", "KeyAdministrationByApprovedSSOAdmin"} {
+		actions := actionsOf(t, statements[sid])
+		for _, denied := range BreakGlassOnlyActions() {
+			assert.NotContains(t, actions, denied, sid)
+		}
+		assert.Len(t, actions, len(adminActions)-1, "%s drops DisableKey and nothing else", sid)
+	}
+	// The recovery statement stays: with the Deny it serves the break-glass
+	// principal alone.
+	assert.Equal(t, []string{kmsDescribeKey, "kms:GetKeyPolicy", "kms:PutKeyPolicy"}, actionsOf(t, statements["BreakGlassPolicyRecovery"]))
+	assert.Equal(t, []string{"kms:Sign"}, actionsOf(t, statements["ExplicitRootCeremonySign"]))
+}
+
+func TestBreakGlassOnlyActionsIsACopy(t *testing.T) {
+	actions := BreakGlassOnlyActions()
+	actions[0] = "kms:Decrypt"
+	assert.NotContains(t, BreakGlassOnlyActions(), "kms:Decrypt")
+}
+
+func TestDeployWithABreakGlassPatternBypassesTheLockoutCheck(t *testing.T) {
+	args := testArgs()
+	args.BreakGlassPrincipalARNPattern = testBreakGlass
+	resources := deploy(t, args)
+
+	keys := slices.Concat(resources["aws:kms/key:Key"], resources["aws:kms/replicaKey:ReplicaKey"])
+	require.Len(t, keys, 2)
+	for _, key := range keys {
+		assert.True(t, key.Inputs["bypassPolicyLockoutSafetyCheck"].BoolValue(), key.Name)
+		assert.Contains(t, policyStatements(t, key.Inputs["policy"].StringValue()), "DenyDestructiveExceptBreakGlass", key.Name)
+	}
+}
+
+func TestDeployWithoutABreakGlassPatternKeepsTheLockoutCheck(t *testing.T) {
+	resources := deploy(t, testArgs())
+
+	keys := slices.Concat(resources["aws:kms/key:Key"], resources["aws:kms/replicaKey:ReplicaKey"])
+	require.Len(t, keys, 2)
+	for _, key := range keys {
+		_, bypassed := key.Inputs["bypassPolicyLockoutSafetyCheck"]
+		assert.False(t, bypassed, key.Name)
+	}
+}
+
+func TestCeremonyTrustConditionsApplyToTheCeremonyRoleAlone(t *testing.T) {
+	args := testArgs()
+	args.CeremonyTrustConditions = []TrustCondition{
+		{Operator: "StringLike", Key: "aws:userid", Values: []string{"*:custodian@example.com"}},
+		{Operator: policyArnLikeKey, Key: "aws:SourceArn", Values: []string{"arn:aws:example"}},
+	}
+	resources := deploy(t, args)
+
+	trusts := map[string]map[string]map[string]any{}
+	for _, role := range resources["aws:iam/role:Role"] {
+		var document struct {
+			Statement []struct {
+				Condition map[string]map[string]any `json:"Condition"`
+			} `json:"Statement"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(role.Inputs["assumeRolePolicy"].StringValue()), &document))
+		require.Len(t, document.Statement, 1)
+		trusts[role.Name] = document.Statement[0].Condition
+	}
+
+	assert.Equal(t, map[string]map[string]any{
+		policyArnLikeKey: {policyPrincipalARNKey: testPattern},
+	}, trusts["private-pki-root-admin"])
+	assert.Equal(t, map[string]map[string]any{
+		policyArnLikeKey: {policyPrincipalARNKey: testPattern, "aws:SourceArn": []any{"arn:aws:example"}},
+		"StringLike":     {"aws:userid": []any{"*:custodian@example.com"}},
+	}, trusts["private-pki-root-ceremony"])
+}
+
+func TestCustodyOptionRefusals(t *testing.T) {
+	condition := func(operator, key string, values ...string) TrustCondition {
+		return TrustCondition{Operator: operator, Key: key, Values: values}
+	}
+	for name, mutate := range map[string]func(*Args){
+		"break-glass in another account": func(a *Args) {
+			a.BreakGlassPrincipalARNPattern = "arn:aws:iam::444455556666:role/break-glass"
+		},
+		"break-glass in another partition": func(a *Args) {
+			a.BreakGlassPrincipalARNPattern = "arn:aws-cn:iam::111122223333:role/break-glass"
+		},
+		"break-glass that is no role":     func(a *Args) { a.BreakGlassPrincipalARNPattern = "arn:aws:iam::111122223333:root" },
+		"break-glass matching every role": func(a *Args) { a.BreakGlassPrincipalARNPattern = "arn:aws:iam::111122223333:role/" },
+		"break-glass that is everyone":    func(a *Args) { a.BreakGlassPrincipalARNPattern = "*" },
+		"break-glass that is the admins":  func(a *Args) { a.BreakGlassPrincipalARNPattern = testPattern },
+		"a condition without an operator": func(a *Args) { a.CeremonyTrustConditions = []TrustCondition{condition("", "aws:userid", "x")} },
+		"a condition without a key":       func(a *Args) { a.CeremonyTrustConditions = []TrustCondition{condition("StringLike", "", "x")} },
+		"a condition without values":      func(a *Args) { a.CeremonyTrustConditions = []TrustCondition{condition("StringLike", "aws:userid")} },
+		"a condition with an empty value": func(a *Args) { a.CeremonyTrustConditions = []TrustCondition{condition("StringLike", "aws:userid", "")} },
+		"the module's own principal condition": func(a *Args) {
+			a.CeremonyTrustConditions = []TrustCondition{condition(policyArnLikeKey, policyPrincipalARNKey, "arn:aws:iam::111122223333:role/x")}
+		},
+		"one condition twice": func(a *Args) {
+			a.CeremonyTrustConditions = []TrustCondition{
+				condition("StringLike", "aws:userid", "a"),
+				condition("StringLike", "aws:userid", "b"),
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			args := testArgs()
+			mutate(&args)
+			mocks := &custodyMocks{}
+			err := pulumi.RunErr(func(ctx *pulumi.Context) error {
+				_, err := Deploy(ctx, args)
+				return err
+			}, pulumi.WithMocks("example", "private-pki-root", mocks))
+			require.Error(t, err)
+			assert.Empty(t, mocks.resourcesByType(), "nothing is registered before the refusal")
+		})
+	}
 }
