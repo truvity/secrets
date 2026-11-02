@@ -3,6 +3,7 @@ package custody
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 const (
@@ -16,9 +17,12 @@ const (
 	policyConditionKey    = "Condition"
 	policyStringEqualsKey = "StringEquals"
 	policyArnLikeKey      = "ArnLike"
+	policyArnNotLikeKey   = "ArnNotLike"
 	policyPrincipalARNKey = "aws:PrincipalArn"
 	policyAWSKey          = "AWS"
 	policyAllow           = "Allow"
+	policyDeny            = "Deny"
+	policyAnyPrincipal    = "*"
 	policyVersion         = "2012-10-17"
 	kmsDescribeKey        = "kms:DescribeKey"
 	kmsSigningAlgorithm   = "kms:SigningAlgorithm"
@@ -53,7 +57,41 @@ var (
 		"kms:UpdatePrimaryRegion",
 	}
 	ceremonyReadActions = []string{kmsDescribeKey, "kms:GetPublicKey"}
+
+	// breakGlassOnlyActions are what the DenyDestructiveExceptBreakGlass
+	// statement refuses to every principal but the break-glass one: the
+	// calls that destroy a root, disable it, rewrite who may sign with it,
+	// hand out its use by grant, or swap its material.
+	breakGlassOnlyActions = []string{
+		"kms:CreateGrant",
+		"kms:DisableKey",
+		"kms:ImportKeyMaterial",
+		"kms:PutKeyPolicy",
+		"kms:ScheduleKeyDeletion",
+	}
 )
+
+// BreakGlassOnlyActions returns the actions a key policy denies to every
+// principal but the break-glass pattern when Args.BreakGlassPrincipalARNPattern
+// is set.
+func BreakGlassOnlyActions() []string {
+	return slices.Clone(breakGlassOnlyActions)
+}
+
+// policyOptions are the opt-in parts of the key policy and the ceremony
+// role's trust. The zero value renders the documents exactly as before
+// either option existed.
+type policyOptions struct {
+	breakGlassPrincipalARNPattern string
+	ceremonyTrustConditions       []TrustCondition
+}
+
+func (a Args) policyOptions() policyOptions {
+	return policyOptions{
+		breakGlassPrincipalARNPattern: a.BreakGlassPrincipalARNPattern,
+		ceremonyTrustConditions:       a.CeremonyTrustConditions,
+	}
+}
 
 // arn composes an ARN from its parts. Composed, never written out: this
 // package takes every account, region and name as an input.
@@ -62,8 +100,19 @@ func arn(partition, service, region, account, resource string) string {
 }
 
 // roleTrustPolicy lets exactly the trusted human principals of the account
-// assume a custody role.
-func roleTrustPolicy(partition, accountID, trustedPrincipalARNPattern string) (string, error) {
+// assume a custody role. extra are further conditions every assumption must
+// also meet (Args.CeremonyTrustConditions, for the ceremony role); validate
+// has refused any that would collide with the principal condition.
+func roleTrustPolicy(partition, accountID, trustedPrincipalARNPattern string, extra ...TrustCondition) (string, error) {
+	condition := map[string]map[string]any{
+		policyArnLikeKey: {policyPrincipalARNKey: trustedPrincipalARNPattern},
+	}
+	for _, item := range extra {
+		if condition[item.Operator] == nil {
+			condition[item.Operator] = map[string]any{}
+		}
+		condition[item.Operator][item.Key] = slices.Clone(item.Values)
+	}
 	return marshalPolicy(map[string]any{
 		policyVersionKey: policyVersion,
 		policyStatementKey: []map[string]any{{
@@ -71,9 +120,7 @@ func roleTrustPolicy(partition, accountID, trustedPrincipalARNPattern string) (s
 			policyEffectKey:    policyAllow,
 			policyPrincipalKey: map[string]any{policyAWSKey: arn(partition, "iam", "", accountID, "root")},
 			policyActionKey:    "sts:AssumeRole",
-			policyConditionKey: map[string]any{
-				policyArnLikeKey: map[string]any{policyPrincipalARNKey: trustedPrincipalARNPattern},
-			},
+			policyConditionKey: condition,
 		}},
 	})
 }
@@ -95,53 +142,82 @@ func roleTrustPolicy(partition, accountID, trustedPrincipalARNPattern string) (s
 // The account-root statement is the break-glass: it can read and rewrite
 // the policy and nothing else, so a policy that locked everyone out can be
 // repaired without the key being unrecoverable.
-func keyPolicy(partition, accountID, trustedPrincipalARNPattern, adminRoleARN, ceremonyRoleARN string) (string, error) {
+//
+// With a break-glass pattern (options), a last statement denies
+// breakGlassOnlyActions to every principal whose ARN does not match it: the
+// account root, the trusted administrators and both roles included. The
+// account-root recovery statement then works for the break-glass principal
+// alone, and the administration statements drop the actions the Deny would
+// refuse anyway, so the document reads as what is possible.
+func keyPolicy(partition, accountID, trustedPrincipalARNPattern, adminRoleARN, ceremonyRoleARN string, options policyOptions) (string, error) {
 	accountRoot := arn(partition, "iam", "", accountID, "root")
-	return marshalPolicy(map[string]any{
-		policyVersionKey: policyVersion,
-		policyStatementKey: []map[string]any{
-			{
-				policySidKey:       "BreakGlassPolicyRecovery",
-				policyEffectKey:    policyAllow,
-				policyPrincipalKey: map[string]any{policyAWSKey: accountRoot},
-				policyActionKey:    []string{kmsDescribeKey, "kms:GetKeyPolicy", "kms:PutKeyPolicy"},
-				policyResourceKey:  "*",
-			},
-			{
-				policySidKey:       "KeyAdministrationWithoutSigningOrDeletion",
-				policyEffectKey:    policyAllow,
-				policyPrincipalKey: map[string]any{policyAWSKey: adminRoleARN},
-				policyActionKey:    adminActions,
-				policyResourceKey:  "*",
-			},
-			{
-				policySidKey:       "KeyAdministrationByApprovedSSOAdmin",
-				policyEffectKey:    policyAllow,
-				policyPrincipalKey: map[string]any{policyAWSKey: accountRoot},
-				policyActionKey:    adminActions,
-				policyResourceKey:  "*",
-				policyConditionKey: map[string]any{
-					policyArnLikeKey: map[string]any{policyPrincipalARNKey: trustedPrincipalARNPattern},
-				},
-			},
-			{
-				policySidKey:       "ExplicitRootCeremonyRead",
-				policyEffectKey:    policyAllow,
-				policyPrincipalKey: map[string]any{policyAWSKey: ceremonyRoleARN},
-				policyActionKey:    ceremonyReadActions,
-				policyResourceKey:  "*",
-			},
-			{
-				policySidKey:       "ExplicitRootCeremonySign",
-				policyEffectKey:    policyAllow,
-				policyPrincipalKey: map[string]any{policyAWSKey: ceremonyRoleARN},
-				policyActionKey:    "kms:Sign",
-				policyResourceKey:  "*",
-				policyConditionKey: map[string]any{
-					policyStringEqualsKey: map[string]any{kmsSigningAlgorithm: ecdsaSHA384},
-				},
+	administration := adminActions
+	if options.breakGlassPrincipalARNPattern != "" {
+		administration = slices.DeleteFunc(slices.Clone(adminActions), func(action string) bool {
+			return slices.Contains(breakGlassOnlyActions, action)
+		})
+	}
+	statements := []map[string]any{
+		{
+			policySidKey:       "BreakGlassPolicyRecovery",
+			policyEffectKey:    policyAllow,
+			policyPrincipalKey: map[string]any{policyAWSKey: accountRoot},
+			policyActionKey:    []string{kmsDescribeKey, "kms:GetKeyPolicy", "kms:PutKeyPolicy"},
+			policyResourceKey:  "*",
+		},
+		{
+			policySidKey:       "KeyAdministrationWithoutSigningOrDeletion",
+			policyEffectKey:    policyAllow,
+			policyPrincipalKey: map[string]any{policyAWSKey: adminRoleARN},
+			policyActionKey:    administration,
+			policyResourceKey:  "*",
+		},
+		{
+			policySidKey:       "KeyAdministrationByApprovedSSOAdmin",
+			policyEffectKey:    policyAllow,
+			policyPrincipalKey: map[string]any{policyAWSKey: accountRoot},
+			policyActionKey:    administration,
+			policyResourceKey:  "*",
+			policyConditionKey: map[string]any{
+				policyArnLikeKey: map[string]any{policyPrincipalARNKey: trustedPrincipalARNPattern},
 			},
 		},
+		{
+			policySidKey:       "ExplicitRootCeremonyRead",
+			policyEffectKey:    policyAllow,
+			policyPrincipalKey: map[string]any{policyAWSKey: ceremonyRoleARN},
+			policyActionKey:    ceremonyReadActions,
+			policyResourceKey:  "*",
+		},
+		{
+			policySidKey:       "ExplicitRootCeremonySign",
+			policyEffectKey:    policyAllow,
+			policyPrincipalKey: map[string]any{policyAWSKey: ceremonyRoleARN},
+			policyActionKey:    "kms:Sign",
+			policyResourceKey:  "*",
+			policyConditionKey: map[string]any{
+				policyStringEqualsKey: map[string]any{kmsSigningAlgorithm: ecdsaSHA384},
+			},
+		},
+	}
+	if options.breakGlassPrincipalARNPattern != "" {
+		statements = append(statements, map[string]any{
+			policySidKey:       "DenyDestructiveExceptBreakGlass",
+			policyEffectKey:    policyDeny,
+			policyPrincipalKey: map[string]any{policyAWSKey: policyAnyPrincipal},
+			policyActionKey:    breakGlassOnlyActions,
+			policyResourceKey:  "*",
+			// ArnNotLike holds when the key is absent, so a caller with no
+			// principal ARN at all (a service acting on its own) is denied
+			// too.
+			policyConditionKey: map[string]any{
+				policyArnNotLikeKey: map[string]any{policyPrincipalARNKey: options.breakGlassPrincipalARNPattern},
+			},
+		})
+	}
+	return marshalPolicy(map[string]any{
+		policyVersionKey:   policyVersion,
+		policyStatementKey: statements,
 	})
 }
 

@@ -465,6 +465,8 @@ every resource and provider ([custody.md](custody.md)).
 | `RolesProviderName` | `private-pki-root-primary` | the roles' provider, `provider/aws/<name>`, in the first generation's primary region |
 | `DeletionWindowDays` | `30` | 7–30 |
 | `Tags` | none | `func(TagScope) map[string]string`, called for `roles`, each generation's `key` and each generation's `sign-alert` |
+| `BreakGlassPrincipalARNPattern` | none | `ArnLike` pattern of the custody account's break-glass role; adds `DenyDestructiveExceptBreakGlass` (`BreakGlassOnlyActions()` for everyone else) to every key policy and creates the keys with the lockout safety check bypassed; a role in the account, not the trusted pattern ([custody.md](custody.md#break-glass-only-the-deny-and-the-ceremony-trust)) |
+| `CeremonyTrustConditions` | none | `[]TrustCondition{Operator, Key, Values}` added to the ceremony role's trust policy only; each pair once, values non-empty |
 
 `Deploy` returns the roles and, per generation, the alias, the regions,
 the key and the replica, for the caller's exports.

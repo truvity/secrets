@@ -19,6 +19,7 @@ package custody
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	awspulumi "github.com/pulumi/pulumi-aws/sdk/v7/go/aws"
 	"github.com/pulumi/pulumi-aws/sdk/v7/go/aws/iam"
@@ -85,6 +86,29 @@ type (
 		RolesProviderName string
 		// DeletionWindowDays defaults to DefaultDeletionWindowDays.
 		DeletionWindowDays int
+
+		// BreakGlassPrincipalARNPattern is an ArnLike pattern for the
+		// break-glass role of the custody account; empty for none. When set,
+		// every key policy ends in an explicit Deny of BreakGlassOnlyActions
+		// (deletion scheduling, disabling, policy writes, grants, key
+		// material import) for every principal whose ARN does not match it:
+		// the account root, the trusted administrators and both roles
+		// included. The keys are then created with KMS's policy lockout
+		// safety check bypassed, because the session that applies them is
+		// itself refused PutKeyPolicy; a later change of a key policy is a
+		// break-glass act, not an apply. It must be a role ARN pattern in
+		// the custody account, other than TrustedPrincipalARNPattern.
+		BreakGlassPrincipalARNPattern string
+		// CeremonyTrustConditions are further conditions on the ceremony
+		// role's trust policy, beside the trusted principal pattern: every
+		// one must hold for the role to be assumed. Each needs a condition
+		// operator, a key and at least one value; an operator and key pair
+		// may appear once, and not as the module's own ArnLike on
+		// aws:PrincipalArn. Pass only conditions the trusted sessions can
+		// meet: an IAM Identity Center session, for one, carries no
+		// aws:MultiFactorAuthPresent, so a Bool condition on it would lock
+		// every ceremony out.
+		CeremonyTrustConditions []TrustCondition
 		// Tags returns the tags for one group of resources; nil tags
 		// nothing.
 		Tags func(TagScope) map[string]string
@@ -100,6 +124,18 @@ type (
 		// second-region sign alert.
 		Region        string
 		ReplicaRegion string
+	}
+
+	// TrustCondition is one condition of a role's trust policy:
+	// {"<Operator>": {"<Key>": [<Values>...]}}. Any one value satisfies it.
+	TrustCondition struct {
+		// Operator is an IAM condition operator, such as StringEquals,
+		// StringLike or ArnLike.
+		Operator string
+		// Key is the condition key, such as aws:userid or aws:SourceIdentity.
+		Key string
+		// Values are the accepted values.
+		Values []string
 	}
 
 	// TagScope says which resources a Tags call is for.
@@ -233,6 +269,45 @@ func (a Args) validate() error {
 	if slices.Contains(a.Notify, "") {
 		return fmt.Errorf("an empty sign-alert address")
 	}
+	if err := a.validateBreakGlass(); err != nil {
+		return err
+	}
+	return validateTrustConditions(a.CeremonyTrustConditions)
+}
+
+// validateBreakGlass refuses a break-glass pattern that could exempt more
+// than one account's roles or that is the administrators' own: a Deny whose
+// exemption is wrong cannot be repaired by anyone the Deny refuses.
+func (a Args) validateBreakGlass() error {
+	pattern := a.BreakGlassPrincipalARNPattern
+	if pattern == "" {
+		return nil
+	}
+	rolePrefix := arn(a.Partition, "iam", "", a.AccountID, "role/")
+	if !strings.HasPrefix(pattern, rolePrefix) || len(pattern) == len(rolePrefix) {
+		return fmt.Errorf("the break-glass principal pattern must be a role in the custody account (%s...), got %q", rolePrefix, pattern)
+	}
+	if pattern == a.TrustedPrincipalARNPattern {
+		return fmt.Errorf("the break-glass principal pattern must differ from the trusted administrators' pattern")
+	}
+	return nil
+}
+
+func validateTrustConditions(conditions []TrustCondition) error {
+	seen := map[[2]string]bool{{policyArnLikeKey, policyPrincipalARNKey}: true}
+	for _, condition := range conditions {
+		if condition.Operator == "" || condition.Key == "" || len(condition.Values) == 0 {
+			return fmt.Errorf("a ceremony trust condition needs an operator, a key and a value, got %+v", condition)
+		}
+		if slices.Contains(condition.Values, "") {
+			return fmt.Errorf("an empty value in the ceremony trust condition %s %s", condition.Operator, condition.Key)
+		}
+		pair := [2]string{condition.Operator, condition.Key}
+		if seen[pair] {
+			return fmt.Errorf("the ceremony trust condition %s %s is given twice or is the module's own", condition.Operator, condition.Key)
+		}
+		seen[pair] = true
+	}
 	return nil
 }
 
@@ -263,6 +338,10 @@ func deployRoles(ctx *pulumi.Context, args Args, provider *awspulumi.Provider, e
 	if err != nil {
 		return nil, nil, err
 	}
+	ceremonyTrust, err := roleTrustPolicy(args.Partition, args.AccountID, args.TrustedPrincipalARNPattern, args.CeremonyTrustConditions...)
+	if err != nil {
+		return nil, nil, err
+	}
 	var boundary pulumi.StringPtrInput
 	if args.PermissionsBoundaryPolicyName != "" {
 		boundary = pulumi.String(arn(args.Partition, "iam", "", args.AccountID, "policy/"+args.PermissionsBoundaryPolicyName))
@@ -285,7 +364,7 @@ func deployRoles(ctx *pulumi.Context, args Args, provider *awspulumi.Provider, e
 	ceremony, err := iam.NewRole(ctx, args.CeremonyRoleName, &iam.RoleArgs{
 		Name:                pulumi.String(args.CeremonyRoleName),
 		Description:         pulumi.String("Read and sign with private PKI root KMS keys during an explicit ceremony"),
-		AssumeRolePolicy:    pulumi.String(trust),
+		AssumeRolePolicy:    pulumi.String(ceremonyTrust),
 		PermissionsBoundary: boundary,
 		MaxSessionDuration:  pulumi.Int(roleMaxSessionSeconds),
 		Tags:                tags,
@@ -305,8 +384,15 @@ func deployGeneration(
 	extra []pulumi.ResourceOption,
 ) (*GenerationKeys, error) {
 	policy := pulumi.All(adminRoleARN, ceremonyRoleARN).ApplyT(func(values []any) (string, error) {
-		return keyPolicy(args.Partition, args.AccountID, args.TrustedPrincipalARNPattern, values[0].(string), values[1].(string))
+		return keyPolicy(args.Partition, args.AccountID, args.TrustedPrincipalARNPattern, values[0].(string), values[1].(string), args.policyOptions())
 	}).(pulumi.StringOutput)
+	// KMS refuses a policy that would stop the caller from writing the next
+	// one, unless told not to check. With the break-glass Deny that refusal
+	// is the point: the applying session is not the break-glass one.
+	var bypassLockoutCheck pulumi.BoolPtrInput
+	if args.BreakGlassPrincipalARNPattern != "" {
+		bypassLockoutCheck = pulumi.Bool(true)
+	}
 	tags := args.tags(TagScope{Kind: TagKey, Generation: generation.ID})
 	with := func(base ...pulumi.ResourceOption) []pulumi.ResourceOption { return append(base, extra...) }
 
@@ -318,6 +404,8 @@ func deployGeneration(
 		DeletionWindowInDays:  pulumi.Int(args.DeletionWindowDays),
 		Policy:                policy,
 		Tags:                  tags,
+
+		BypassPolicyLockoutSafetyCheck: bypassLockoutCheck,
 	}, with(pulumi.Provider(provider), pulumi.Protect(true), pulumi.RetainOnDelete(true))...)
 	if err != nil {
 		return nil, fmt.Errorf("create root key %s: %w", generation.ID, err)
@@ -344,6 +432,8 @@ func deployGeneration(
 			DeletionWindowInDays: pulumi.Int(args.DeletionWindowDays),
 			Policy:               policy,
 			Tags:                 tags,
+
+			BypassPolicyLockoutSafetyCheck: bypassLockoutCheck,
 		}, with(pulumi.Provider(replicaProvider), pulumi.Protect(true), pulumi.RetainOnDelete(true))...)
 		if err != nil {
 			return nil, fmt.Errorf("create root replica %s: %w", generation.ID, err)

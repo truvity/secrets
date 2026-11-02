@@ -57,6 +57,51 @@ The administration list includes `GetKeyRotationStatus` and
 update, even of a `SIGN_VERIFY` key that cannot rotate, and a policy that
 omits one fails the apply **after** the key exists.
 
+## Break-glass only: the Deny and the ceremony trust
+
+Two options harden the custody further. Both are off by default; without
+them every document renders exactly as before.
+
+**`BreakGlassPrincipalARNPattern`** names the custody account's break-glass
+role (an `ArnLike` pattern). Every key policy then ends in one more
+statement:
+
+| Statement | Principal | Effect |
+|---|---|---|
+| `DenyDestructiveExceptBreakGlass` | every principal, `ArnNotLike` the break-glass pattern | **Deny** `ScheduleKeyDeletion`, `DisableKey`, `PutKeyPolicy`, `CreateGrant`, `ImportKeyMaterial` (`custody.BreakGlassOnlyActions()`) |
+
+The Deny covers the account root, the trusted administrators and both
+roles, and a caller with no principal ARN at all. The administration
+statements drop `DisableKey`, the one of those actions they used to allow,
+so the policy reads as what is possible. `BreakGlassPolicyRecovery` stays
+and now serves the break-glass role alone: it is the one way to change a
+key policy, and through it the one way to the other denied actions (rewrite
+the policy, then act). The pattern must be a role in the custody account
+and must differ from `TrustedPrincipalARNPattern`; a wrong exemption cannot
+be repaired by anyone the Deny refuses, so check it before the first apply.
+
+Two consequences for the apply:
+
+- The keys are created with `BypassPolicyLockoutSafetyCheck`. KMS refuses
+  a policy that would stop the caller from writing the next one, and the
+  session that applies the custody is, by design, such a caller.
+- A later change of a key policy is not an apply. The provider would call
+  `PutKeyPolicy` as the applying session and be denied; the break-glass
+  role writes the policy (once per region: a replica keeps its own copy)
+  and the stack is refreshed afterwards.
+
+**`CeremonyTrustConditions`** adds conditions to the ceremony role's trust
+policy, beside the trusted principal pattern; the admin role's trust is
+unchanged. Each is an operator, a key and its values
+(`{"StringLike": {"aws:userid": ["*:custodian@example.com"]}}`), every one
+must hold, and an operator and key pair may appear once. Pass only what the
+trusted sessions carry. A session from IAM Identity Center has no
+`aws:MultiFactorAuthPresent`, whatever the identity provider enforced: a
+`Bool` condition on it can never be met and would lock every ceremony out,
+and `BoolIfExists` would always pass. Multi-factor authentication for such
+sessions is the identity provider's; what the trust can narrow is which
+session may assume the role, for example one person's `aws:userid`.
+
 ## The Sign alarm
 
 After the ceremony a root key signs two or three times in its life, so
