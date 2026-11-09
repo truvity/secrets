@@ -5,6 +5,12 @@ heading here is a patch cut automatically for dependency bumps alone; its
 GitHub Release lists them. Both charts are released at every version, and
 from v0.2.0 on the Go module and `openbaoctl` with them.
 
+## v0.49.0
+
+### Added
+
+- **`pkg/door`: the roster login is routed for `PUT` as well as `POST`.** OpenBAO serves both alike, and its API client sends `PUT`: the CLI's `write auth/<mount>/login` and the Terraform/Pulumi vault provider's JWT login. Through a door built from `Login()`, such a login answered 404. Every other path and method is as before.
+
 ## v0.48.2
 
 - Dependency updates.
