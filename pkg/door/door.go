@@ -137,6 +137,10 @@ func (p *Paths) at(path string) string { return "^/v1/" + p.prefix + path + "$" 
 func (p *Paths) Login() []Match {
 	return []Match{
 		{Path: p.at(`auth/` + model.RosterMount + `/login`), Method: "POST"},
+		// The same login as PUT: OpenBAO's API client (the CLI's `write`, and
+		// the Terraform/Pulumi vault provider's login) sends PUT, which
+		// OpenBAO serves exactly like POST.
+		{Path: p.at(`auth/` + model.RosterMount + `/login`), Method: "PUT"},
 		{Path: p.at(`auth/` + model.RosterUIMount + `/oidc/auth_url`), Method: "POST"},
 		{Path: p.at(`auth/` + model.RosterUIMount + `/oidc/callback`), Method: "GET"},
 	}
