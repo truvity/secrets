@@ -1,0 +1,30 @@
+# Two namespaced stores on a cluster whose External Secrets holds its own AWS
+# identity (EKS Pod Identity), beside a reader and a writer ClusterSecretStore.
+# Each namespace gets one SecretStore named ssm, on its own reader role and
+# with no auth; the admission policy admits exactly these two, pinned to
+# namespace, name, role and region, and no other namespaced store without auth.
+aws:
+  identity: podIdentity
+
+awsStores:
+  - name: example-app-config
+    region: eu-example-1
+    role: arn:aws:iam::444455556666:role/a-app-config
+    conditions:
+      - namespaces: [example-app]
+
+awsWriters:
+  - name: example-app-client-push
+    region: eu-example-1
+    role: arn:aws:iam::444455556666:role/a-eso-app-client-writer
+    prefix: /example/app/client/
+    conditions:
+      - namespaces: [example-app]
+
+awsNamespacedStores:
+  - namespace: example-infra-a
+    role: arn:aws:iam::444455556666:role/example-eso.example-infra-a
+    region: eu-example-1
+  - namespace: example-infra-b
+    role: arn:aws:iam::444455556666:role/example-eso.example-infra-b
+    region: eu-example-1

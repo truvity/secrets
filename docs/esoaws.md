@@ -207,6 +207,9 @@ grant from their own namespace. Two controls close that:
      auth;
    - an AWS `ClusterSecretStore` that is not one of this release's
      `awsStores`;
+   - the one exception for a namespaced store: the release's own `ssm` of a
+     namespace in `awsNamespacedStores`, with no auth, is admitted, and only
+     as listed ([below](#the-namespaced-store-one-ssm-per-namespace));
    - one of the release's own stores that differs from what the release
      renders. In `podIdentity` mode it must assume exactly the rendered
      `role`, with no `auth`, `additionalRoles`, `sessionTags`,
@@ -274,6 +277,52 @@ reach it, is not a principal any reader role trusts. The policy can still be
 turned on (`aws.admissionPolicy.enabled: true`) as a second line.
 [safety.md](safety.md#an-aws-identity-any-namespace-can-borrow) has the
 same in the list of refusals.
+
+## The namespaced store: one `ssm` per namespace
+
+A cluster-wide `ClusterSecretStore` limited by `conditions` is one way to
+give a namespace its parameters. The other is a store the namespace owns:
+`awsNamespacedStores` renders, for each entry, one `SecretStore` named
+`ssm` in that namespace, on Parameter Store in the entry's region, assuming
+the entry's reader role and naming no auth:
+
+```yaml
+aws:
+  identity: podIdentity
+awsNamespacedStores:
+  - namespace: example-infra
+    role: arn:aws:iam::444455556666:role/example-eso.example-infra
+    region: eu-example-1
+```
+
+- **One name, one role per namespace.** The store is always called `ssm`,
+  so an `ExternalSecret` says `secretStoreRef: {kind: SecretStore, name:
+  ssm}` in every namespace, and a namespace is listed once. The role is that
+  namespace's own reader role (`esoaws.Readers.RoleARNs`), so the parameters
+  it reads are those of its grant and no others. It must not be a writer's.
+- **A namespace never reads through another's.** A namespaced
+  `SecretStore` can be referenced only by `ExternalSecret`s of its own
+  namespace; an `ExternalSecret` in namespace X cannot name a store in
+  namespace Y. That is External Secrets' own rule and the chart relies on
+  it. Tenants never create the store: the release does.
+- **PodIdentity only.** The store names no auth, so it reads as the
+  controller's identity, which may assume every reader role of the cluster.
+  Only the admission policy keeps it to its one role.
+- **The admission policy admits exactly that store, and nothing else of its
+  kind.** An AWS `SecretStore` with no auth stays forbidden, as above, except
+  the one whose namespace, name `ssm`, `role` and `region` all equal an entry
+  of `awsNamespacedStores`, with the Parameter Store service and no `auth`
+  (an empty one included), `prefix`, `additionalRoles`, `sessionTags`,
+  `transitiveTagKeys` or `externalID`. Another role, another name, an
+  unlisted namespace, another region, or any auth field, even one that
+  changes nothing, is refused; a store named `ssm` in a listed namespace
+  with its own auth is refused too, since that name in that namespace is the
+  release's. With no entries the policy admits no store without auth at all.
+- **The release and the policy move together.** An entry added, or a role
+  changed, reaches the policy and the store in one release; see
+  [upgrades](#upgrades-the-policy-goes-first) for the order.
+
+`just admission-conformance` proves each refusal on a real API server.
 
 ## Writer stores: the narrow exception
 

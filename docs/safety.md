@@ -109,7 +109,9 @@ Two controls close it, and a cluster in `podIdentity` mode needs both:
 - **The admission policy** (`aws.admissionPolicy`, on by default in
   `podIdentity` mode) refuses an AWS `SecretStore`, generator or
   `ClusterGenerator` with no `secretRef` or `jwt` auth (an empty `auth: {}`
-  counts as none). It also refuses an AWS `ClusterSecretStore` that is not
+  counts as none). The one namespaced store without auth it admits is a
+  release's own `ssm` of a namespace in `awsNamespacedStores`, pinned to its
+  role and region. It also refuses an AWS `ClusterSecretStore` that is not
   one of the release's `awsStores`, and one of the release's that differs
   from what it renders (another role, `auth`, `additionalRoles`, session
   tags, an external id). It judges an update even while the object waits on
@@ -357,6 +359,7 @@ happens, and its tests run every refusal against a KMS double.
 | in `podIdentity` mode, the AWS admission policy turned off, without `Deny`, or with `failurePolicy: Ignore`, unless `acknowledgeTenantsCanBorrowControllerIdentity` | the guard against borrowing the controller's identity, quietly gone |
 | an AWS store (`awsStores`) with no `conditions`, or with `namespaceRegexes` (schema) | a ClusterSecretStore on Parameter Store readable from every namespace |
 | an AWS store with no `region`, or a `role` that is not one IAM role ARN (schema) | a store that reads as the External Secrets controller itself, or assumes any role a pattern matches |
+| `awsNamespacedStores` outside `podIdentity` mode, a namespace listed twice, or a role that is a writer's | a store with no auth that no policy can pin, two roles for one store, or a reader store that could write |
 | `awsStores` with no `aws.identity` | a cluster whose identity mode is whatever the stores happen to say |
 | a `podIdentity` store with `auth` or `serviceAccount`; a `webIdentity` store without `auth.jwt.serviceAccountRef`, or a reference without a namespace (schema), or any other auth (schema) | the two modes mixed on one cluster: a store with no auth beside per-store identities borrows the controller's |
 | two `webIdentity` stores on one ServiceAccount | one ServiceAccount carrying two roles, of which External Secrets reads one |

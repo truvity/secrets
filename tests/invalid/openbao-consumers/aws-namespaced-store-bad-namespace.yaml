@@ -1,0 +1,6 @@
+aws:
+  identity: podIdentity
+awsNamespacedStores:
+  - namespace: Example_Infra
+    role: arn:aws:iam::444455556666:role/example-eso.example-infra
+    region: eu-example-1

@@ -285,6 +285,29 @@
         }
       }
     },
+    "awsNamespacedStores": {
+      "description": "The release-rendered namespaced store (podIdentity only): one SecretStore named `ssm` in each listed namespace, on Parameter Store through that namespace's reader role, naming no auth. The admission policy admits exactly these and no other namespaced AWS store without auth.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["namespace", "role", "region"],
+        "properties": {
+          "namespace": {
+            "description": "The one namespace whose ExternalSecrets may use the store. One entry per namespace.",
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "maxLength": 63
+          },
+          "role": {
+            "description": "The namespace's reader role, in the parameters' account: one IAM role ARN, no wildcard.",
+            "type": "string",
+            "pattern": "^arn:aws(-[a-z]+)*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$"
+          },
+          "region": { "type": "string", "pattern": "^[a-z]{2,}(-[a-z0-9]+)+$" }
+        }
+      }
+    },
     "awsWriters": {
       "description": "Writer stores on Parameter Store (podIdentity only): one ClusterSecretStore each, assuming a writer role and pinned to one parameter prefix. The narrow exception to reader-only stores.",
       "type": "array",

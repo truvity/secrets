@@ -98,6 +98,16 @@ spec:
         (has(variables.obj.spec.generator.stsSessionTokenSpec) && !(has(variables.obj.spec.generator.stsSessionTokenSpec.auth) && (has(variables.obj.spec.generator.stsSessionTokenSpec.auth.secretRef) || has(variables.obj.spec.generator.stsSessionTokenSpec.auth.jwt)))))
     - name: expected
       expression: '{"example-app-config":{"role":"arn:aws:iam::444455556666:role/a-app-config"},"example-app-credentials":{"role":"arn:aws:iam::444455556666:role/a-app-credentials"}}'
+    # The namespaced store of awsNamespacedStores: its slot is the name `ssm`
+    # in a listed namespace. Whatever sits in the slot is judged against the
+    # release's entry, and nowhere else is a namespaced store without auth
+    # admitted.
+    - name: expectedNs
+      expression: '{}'
+    - name: nsSlot
+      expression: >-
+        variables.kind == 'SecretStore' && variables.onAWS && variables.obj.metadata.name == 'ssm' &&
+        request.namespace in variables.expectedNs
     - name: releaseStore
       expression: >-
         variables.kind == 'ClusterSecretStore' && variables.onAWS && variables.obj.metadata.name in variables.expected
@@ -108,7 +118,7 @@ spec:
         has(variables.aws.additionalRoles) || has(variables.aws.sessionTags) ||
         has(variables.aws.transitiveTagKeys) || has(variables.aws.externalID)
   validations:
-    - expression: "variables.kind != 'SecretStore' || !variables.onAWS || variables.storeOwnAuth"
+    - expression: "variables.kind != 'SecretStore' || !variables.onAWS || variables.nsSlot || variables.storeOwnAuth"
       messageExpression: >-
         variables.subject + ' is on the aws provider with no auth of its own (secretRef or jwt): External Secrets would use its' +
         ' controller\'s AWS identity, which may assume this cluster\'s parameter reader roles'
@@ -122,6 +132,20 @@ spec:
         variables.subject +
         ' is on the aws provider but is not one of the stores release openbao-consumers renders (awsStores):' +
         ' every namespace its conditions admit would read with the controller\'s AWS identity'
+      reason: Forbidden
+    # podIdentity: the release's namespaced `ssm` store reads as the
+    # controller, assuming its namespace's one rendered role in its one
+    # rendered region and nothing else: no auth of any kind (an empty one
+    # included), no prefix, no additional roles, tags or external id.
+    - expression: >-
+        !variables.nsSlot || (!variables.extras && !has(variables.aws.auth) && !has(variables.aws.prefix) &&
+        has(variables.aws.service) && variables.aws.service == 'ParameterStore' &&
+        has(variables.aws.role) && variables.aws.role == variables.expectedNs[request.namespace].role &&
+        has(variables.aws.region) && variables.aws.region == variables.expectedNs[request.namespace].region)
+      messageExpression: >-
+        variables.subject + ' is release openbao-consumers\'s, but differs from what it renders (awsNamespacedStores): it reads Parameter Store in region ' +
+        variables.expectedNs[request.namespace].region + ' as exactly ' + variables.expectedNs[request.namespace].role +
+        ', with no auth, prefix, additionalRoles, sessionTags, transitiveTagKeys or externalID'
       reason: Forbidden
     # podIdentity: the release's store reads as the controller, assuming its
     # one rendered role and nothing else.

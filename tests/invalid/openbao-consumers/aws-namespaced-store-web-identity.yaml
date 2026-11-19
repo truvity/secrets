@@ -1,0 +1,8 @@
+# A namespaced store names no auth, so it reads as the controller's own
+# credentials: a webIdentity cluster has none, and no policy there can pin it.
+aws:
+  identity: webIdentity
+awsNamespacedStores:
+  - namespace: example-infra
+    role: arn:aws:iam::444455556666:role/example-eso.example-infra
+    region: eu-example-1

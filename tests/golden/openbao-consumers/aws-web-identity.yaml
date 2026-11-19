@@ -118,6 +118,16 @@ spec:
         (has(variables.obj.spec.generator.stsSessionTokenSpec) && !(has(variables.obj.spec.generator.stsSessionTokenSpec.auth) && (has(variables.obj.spec.generator.stsSessionTokenSpec.auth.secretRef) || has(variables.obj.spec.generator.stsSessionTokenSpec.auth.jwt)))))
     - name: expected
       expression: '{"b-app-config":{"ns":"external-secrets","sa":"eso-b-app-config"},"b-app-credentials":{"ns":"external-secrets","sa":"eso-b-app-credentials"}}'
+    # The namespaced store of awsNamespacedStores: its slot is the name `ssm`
+    # in a listed namespace. Whatever sits in the slot is judged against the
+    # release's entry, and nowhere else is a namespaced store without auth
+    # admitted.
+    - name: expectedNs
+      expression: '{}'
+    - name: nsSlot
+      expression: >-
+        variables.kind == 'SecretStore' && variables.onAWS && variables.obj.metadata.name == 'ssm' &&
+        request.namespace in variables.expectedNs
     - name: releaseStore
       expression: >-
         variables.kind == 'ClusterSecretStore' && variables.onAWS && variables.obj.metadata.name in variables.expected
@@ -128,7 +138,7 @@ spec:
         has(variables.aws.additionalRoles) || has(variables.aws.sessionTags) ||
         has(variables.aws.transitiveTagKeys) || has(variables.aws.externalID)
   validations:
-    - expression: "variables.kind != 'SecretStore' || !variables.onAWS || variables.storeOwnAuth"
+    - expression: "variables.kind != 'SecretStore' || !variables.onAWS || variables.nsSlot || variables.storeOwnAuth"
       messageExpression: >-
         variables.subject + ' is on the aws provider with no auth of its own (secretRef or jwt): External Secrets would use its' +
         ' controller\'s AWS identity, which may assume this cluster\'s parameter reader roles'

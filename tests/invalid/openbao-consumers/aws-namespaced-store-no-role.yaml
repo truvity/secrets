@@ -1,0 +1,5 @@
+aws:
+  identity: podIdentity
+awsNamespacedStores:
+  - namespace: example-infra
+    region: eu-example-1

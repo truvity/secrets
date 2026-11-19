@@ -1,0 +1,7 @@
+# One IAM role ARN, never a pattern.
+aws:
+  identity: podIdentity
+awsNamespacedStores:
+  - namespace: example-infra
+    role: arn:aws:iam::444455556666:role/example-eso.*
+    region: eu-example-1

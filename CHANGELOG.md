@@ -5,6 +5,12 @@ heading here is a patch cut automatically for dependency bumps alone; its
 GitHub Release lists them. Both charts are released at every version, and
 from v0.2.0 on the Go module and `openbaoctl` with them.
 
+## v0.50.0
+
+### Added
+
+- **`openbao-consumers`: `awsNamespacedStores`, a namespaced `SecretStore` named `ssm` per listed namespace.** Each entry (`namespace`, `role`, `region`) renders one `SecretStore` named `ssm` in that namespace, on Parameter Store through that namespace's reader role, with no auth block. `podIdentity` only; a namespace is listed once, and the role must not be a writer's. The admission policy admits an AWS `SecretStore` without auth only when its namespace, name, role and region equal an entry, with no `auth`, `prefix`, `additionalRoles`, `sessionTags`, `transitiveTagKeys` or `externalID`; any other namespaced store without auth is refused as before, and with no entries none is admitted. An `ExternalSecret` still reads only the store of its own namespace. Adoption: add the list, and release it with its policy as one chart (the policy is applied a sync wave before the stores). Unset, the chart renders what it did.
+
 ## v0.49.1
 
 - Dependency updates.

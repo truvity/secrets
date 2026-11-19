@@ -281,6 +281,7 @@ Stores and PKI are independent: an install may render either or both.
 | `stores` | one ClusterSecretStore per kind, `<name>-<storeSuffix>` |
 | `writers` | one ClusterSecretStore per (writer, environment), `<name>-<environment>` |
 | `awsStores` | one ClusterSecretStore on AWS Parameter Store per entry, `<name>`, and in `webIdentity` mode its ServiceAccount ([esoaws.md](esoaws.md)) |
+| `awsNamespacedStores` | one SecretStore named `ssm` in each listed namespace, on AWS Parameter Store through that namespace's reader role, no auth; `podIdentity` only ([esoaws.md](esoaws.md#the-namespaced-store-one-ssm-per-namespace)) |
 | `aws.admissionPolicy` | a ValidatingAdmissionPolicy and binding, `<release>-aws-stores`; on by default in `podIdentity` mode |
 | `pki.trustAnchors` | one ConfigMap per root, in `pki.certManager.namespace` |
 | `pki.issuers` | the login's ServiceAccount, Role and RoleBinding (`<issuerServiceAccount>-token`), and one issuer per entry |
@@ -326,6 +327,9 @@ Stores and PKI are independent: an install may render either or both.
 | `awsStores[].serviceAccount.create` | `true` | `webIdentity` only: render that ServiceAccount, annotated with the role and audience and mounting no token. `false`: you provide it, with the same annotations. |
 | `awsStores[].serviceAccount.annotations` | `{}` | On a rendered ServiceAccount; the role and audience annotations are the chart's. |
 | `awsStores[].annotations` | `{}` | |
+| `awsNamespacedStores[].namespace` | *required* | The one namespace whose ExternalSecrets may use the store, which is always named `ssm`. One entry per namespace. `podIdentity` only. A namespaced store cannot be used from another namespace. |
+| `awsNamespacedStores[].role` | *required* | The namespace's reader role in the parameters' account: one IAM role ARN, no wildcard, not a writer's. The store names no auth, and the admission policy admits it only with exactly this role. |
+| `awsNamespacedStores[].region` | *required* | The region of the parameters it reads; pinned by the admission policy as well. |
 | `pki.enabled` | `false` | Render the anchors, the issuers and the bundle. |
 | `pki.annotations` | `{}` | On the anchors and on the login's ServiceAccount, Role and RoleBinding. |
 | `pki.certManager.namespace` | `cert-manager` | Where the anchors, the login and namespaced issuers live; the default namespace of `certificates`. |
