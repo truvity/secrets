@@ -1,0 +1,5 @@
+# awsNamespacedStores, like awsStores, need the mode named.
+awsNamespacedStores:
+  - namespace: example-infra
+    role: arn:aws:iam::444455556666:role/example-eso.example-infra
+    region: eu-example-1

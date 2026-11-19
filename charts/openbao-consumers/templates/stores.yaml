@@ -80,8 +80,8 @@ spec:
 {{- end }}
 {{- end }}
 {{- $mode := .Values.aws.identity }}
-{{- if and (or .Values.awsStores .Values.awsWriters) (not $mode) }}
-{{- fail "aws.identity is required with awsStores and awsWriters: podIdentity or webIdentity. There is no default: the modes are mutually exclusive on a cluster, because a controller identity beside per-store identities is one any store without auth borrows" }}
+{{- if and (or .Values.awsStores .Values.awsWriters .Values.awsNamespacedStores) (not $mode) }}
+{{- fail "aws.identity is required with awsStores, awsWriters and awsNamespacedStores: podIdentity or webIdentity. There is no default: the modes are mutually exclusive on a cluster, because a controller identity beside per-store identities is one any store without auth borrows" }}
 {{- end }}
 {{- range $store := .Values.awsStores }}
 {{- if not $store.name }}{{- fail "every entry of awsStores needs a name" }}{{- end }}
@@ -210,4 +210,51 @@ spec:
       region: {{ $w.region | quote }}
       role: {{ $w.role | quote }}
       prefix: {{ $w.prefix | quote }}
+{{- end }}
+{{- /* The release-rendered namespaced store: one SecretStore named `ssm` per
+       listed namespace, reading Parameter Store through that
+       namespace's own reader role. A namespaced store can be used only by
+       ExternalSecrets of its own namespace, so no namespace reads through
+       another's. It names no auth, so it reads as the controller's Pod
+       Identity: podIdentity only, and only the admission policy, which
+       admits exactly (namespace, `ssm`, role, region) as listed, keeps any
+       other namespaced store without auth refused. docs/esoaws.md. */}}
+{{- $nsSeen := dict }}
+{{- range $i, $n := .Values.awsNamespacedStores }}
+{{- if ne $mode "podIdentity" }}
+{{- fail (printf "awsNamespacedStores[%d] needs aws.identity podIdentity: the store names no auth and reads as the controller's own credentials, which only the podIdentity admission policy can pin to its one role" $i) }}
+{{- end }}
+{{- if not $n.namespace }}
+{{- fail (printf "awsNamespacedStores[%d] needs namespace — the one namespace whose ExternalSecrets may use the store" $i) }}
+{{- end }}
+{{- if not $n.region }}
+{{- fail (printf "awsNamespacedStores.%s needs region — the region of the parameters it reads" $n.namespace) }}
+{{- end }}
+{{- if not $n.role }}
+{{- fail (printf "awsNamespacedStores.%s needs role — the namespace's reader role in the parameters' account" $n.namespace) }}
+{{- end }}
+{{- range $w := $.Values.awsWriters }}
+{{- if eq $w.role $n.role }}
+{{- fail (printf "awsNamespacedStores.%s uses the role of awsWriters.%s: a writer role is not a reader's, or the reader store could write" $n.namespace $w.name) }}
+{{- end }}
+{{- end }}
+{{- /* One `ssm` per namespace: a second entry for a namespace is two roles
+       for one store, and the policy pins exactly one. */}}
+{{- include "consumers.claim" (dict "registry" $registry "kind" "SecretStore" "namespace" $n.namespace "name" "ssm" "by" (printf "awsNamespacedStores.%s" $n.namespace)) }}
+---
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: ssm
+  namespace: {{ $n.namespace | quote }}
+  {{- with include "consumers.annotations" (dict "root" $ "extra" dict) | fromYaml }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  provider:
+    aws:
+      service: ParameterStore
+      region: {{ $n.region | quote }}
+      role: {{ $n.role | quote }}
 {{- end }}

@@ -25,6 +25,20 @@ const (
 	writerRole   = "arn:aws:iam::444455556666:role/a-eso-app-client-writer"
 	writerPrefix = "/example/app/client/"
 
+	// The release-rendered namespaced stores: one `ssm` in each of two
+	// namespaces, each on its own reader role.
+	nsRoleA = "arn:aws:iam::444455556666:role/example-eso.example-infra-a"
+	nsRoleB = "arn:aws:iam::444455556666:role/example-eso.example-infra-b"
+
+	namespacedStores = `awsNamespacedStores:
+  - namespace: infra-a
+    role: ` + nsRoleA + `
+    region: eu-example-1
+  - namespace: infra-b
+    role: ` + nsRoleB + `
+    region: eu-example-1
+`
+
 	podValues = `aws:
   identity: podIdentity
 awsStores:
@@ -40,7 +54,7 @@ awsWriters:
     prefix: ` + writerPrefix + `
     conditions:
       - namespaces: [tenant]
-`
+` + namespacedStores
 
 	// podValuesNext is the pod release one change later: the store's role
 	// moved, and a store added.
@@ -64,8 +78,20 @@ awsWriters:
     prefix: ` + writerPrefix + `
     conditions:
       - namespaces: [tenant]
-`
+` + namespacedStores
 	nextRole = "arn:aws:iam::444455556666:role/a-app-config-next"
+
+	// podValuesNoNamespaced is the pod release with no awsNamespacedStores:
+	// podIdentity mode, and no namespaced store is admitted without auth.
+	podValuesNoNamespaced = `aws:
+  identity: podIdentity
+awsStores:
+  - name: example-app-config
+    region: eu-example-1
+    role: ` + readerRole + `
+    conditions:
+      - namespaces: [tenant]
+`
 
 	// auditFilter is docs/esoaws.md's audit, verbatim: every AWS SecretStore
 	// and generator that names no auth of its own, which a policy installed
@@ -230,8 +256,10 @@ func TestAdmissionPolicyAWS(t *testing.T) {
 		"crd/clustergenerators.generators.external-secrets.io")
 	require.NoError(t, err, out)
 
-	out, err = kubectl(t, kubeconfig, "", "create", "namespace", "tenant")
-	require.NoError(t, err, out)
+	for _, namespace := range []string{"tenant", "infra-a", "infra-b", "unlisted"} {
+		out, err = kubectl(t, kubeconfig, "", "create", "namespace", namespace)
+		require.NoError(t, err, out)
+	}
 
 	// What exists before the policy is never judged by it: the audit is
 	// what finds it.
@@ -286,6 +314,42 @@ func TestAdmissionPolicyAWS(t *testing.T) {
 		{"a SecretStore on aws with its own ServiceAccount", "tenant", awsStore("SecretStore", "jwt", withRole(jwtAuth)), nil},
 		{"a SecretStore on aws with its own keys", "tenant", awsStore("SecretStore", "keys", withRole(keyAuth)), nil},
 		{"a SecretStore not on aws", "tenant", fakeStore("SecretStore", "fake"), nil},
+		// The namespaced `ssm` store (awsNamespacedStores): admitted only as
+		// listed, by namespace, name, role and region.
+		{"the release's ssm store in its namespace", "infra-a", awsStore("SecretStore", "ssm", "      role: "+nsRoleA+"\n"), nil},
+		{"the release's ssm store in the other listed namespace", "infra-b", awsStore("SecretStore", "ssm", "      role: "+nsRoleB+"\n"), nil},
+		{"an ssm store with another role", "infra-a", awsStore("SecretStore", "ssm", withRole("")),
+			[]string{"SecretStore ssm in namespace infra-a", "differs from what it renders (awsNamespacedStores)", "exactly " + nsRoleA}},
+		{"an ssm store with the role of the other listed namespace", "infra-a", awsStore("SecretStore", "ssm", "      role: "+nsRoleB+"\n"),
+			[]string{"differs from what it renders (awsNamespacedStores)"}},
+		{"an ssm store with no role", "infra-a", awsStore("SecretStore", "ssm", ""),
+			[]string{"differs from what it renders (awsNamespacedStores)"}},
+		{"a store named differently in a listed namespace", "infra-a", awsStore("SecretStore", "other", "      role: "+nsRoleA+"\n"),
+			[]string{"SecretStore other in namespace infra-a", "no auth of its own"}},
+		{"the ssm store in an unlisted namespace", "unlisted", awsStore("SecretStore", "ssm", "      role: "+nsRoleA+"\n"),
+			[]string{"SecretStore ssm in namespace unlisted", "no auth of its own"}},
+		{"the ssm store in another region", "infra-a",
+			strings.Replace(awsStore("SecretStore", "ssm", "      role: "+nsRoleA+"\n"), "eu-example-1", "eu-example-2", 1),
+			[]string{"differs from what it renders (awsNamespacedStores)"}},
+		{"an ssm store with an empty auth", "infra-a", awsStore("SecretStore", "ssm", "      role: "+nsRoleA+"\n      auth: {}\n"),
+			[]string{"differs from what it renders (awsNamespacedStores)"}},
+		{"an ssm store with its own ServiceAccount", "infra-a", awsStore("SecretStore", "ssm", "      role: "+nsRoleA+"\n"+jwtAuth),
+			[]string{"differs from what it renders (awsNamespacedStores)"}},
+		{"an ssm store with its own keys and no role", "infra-a", awsStore("SecretStore", "ssm", keyAuth),
+			[]string{"differs from what it renders (awsNamespacedStores)"}},
+		{"an ssm store with a prefix", "infra-a", awsStore("SecretStore", "ssm", "      role: "+nsRoleA+"\n      prefix: /example/\n"),
+			[]string{"differs from what it renders (awsNamespacedStores)"}},
+		{"an ssm store with additionalRoles", "infra-a",
+			awsStore("SecretStore", "ssm", "      role: "+nsRoleA+"\n      additionalRoles: ["+readerRole+"]\n"),
+			[]string{"differs from what it renders (awsNamespacedStores)"}},
+		{"an ssm store with sessionTags", "infra-a",
+			awsStore("SecretStore", "ssm", "      role: "+nsRoleA+"\n      sessionTags: [{key: team, value: a}]\n"),
+			[]string{"differs from what it renders (awsNamespacedStores)"}},
+		{"an ssm store with an externalID", "infra-a", awsStore("SecretStore", "ssm", "      role: "+nsRoleA+"\n      externalID: x\n"),
+			[]string{"differs from what it renders (awsNamespacedStores)"}},
+		{"an ssm ClusterSecretStore", "", awsStore("ClusterSecretStore", "ssm", "      role: "+nsRoleA+"\n"),
+			[]string{"not one of the stores release pod renders"}},
+		{"an ssm store not on aws", "infra-a", fakeStore("SecretStore", "ssm"), nil},
 		{"the release's ClusterSecretStore", "", awsStore("ClusterSecretStore", "example-app-config", withRole("")), nil},
 		{"the release's store with another role", "",
 			awsStore("ClusterSecretStore", "example-app-config", "      role: arn:aws:iam::444455556666:role/other\n"),
@@ -412,6 +476,24 @@ func TestAdmissionPolicyAWS(t *testing.T) {
 
 			return err != nil
 		})
+	})
+
+	// Without awsNamespacedStores the same exact store is refused: the
+	// exception exists only where the release lists it.
+	t.Run("no namespaced store is admitted without a listing", func(t *testing.T) {
+		installAWSPolicy(t, kubeconfig, "pod", podValuesNoNamespaced)
+
+		store := awsStore("SecretStore", "ssm", "      role: "+nsRoleA+"\n")
+
+		waitFor(t, "the policy without namespaced stores to be picked up", func() bool {
+			_, ok := admit(t, kubeconfig, "infra-a", store)
+
+			return !ok
+		})
+
+		out, ok := admit(t, kubeconfig, "infra-a", store)
+		assert.False(t, ok, out)
+		assert.Contains(t, out, "no auth of its own")
 	})
 
 	// webIdentity: the pod release's policy goes, and a web release's

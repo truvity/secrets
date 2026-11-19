@@ -1,0 +1,10 @@
+# One ssm per namespace, and the policy pins exactly one role for it.
+aws:
+  identity: podIdentity
+awsNamespacedStores:
+  - namespace: example-infra
+    role: arn:aws:iam::444455556666:role/example-eso.example-infra
+    region: eu-example-1
+  - namespace: example-infra
+    role: arn:aws:iam::444455556666:role/example-eso.example-infra-other
+    region: eu-example-1

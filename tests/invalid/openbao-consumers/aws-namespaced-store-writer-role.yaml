@@ -1,0 +1,13 @@
+# A writer role is not a reader's, or the namespace's store could write.
+aws:
+  identity: podIdentity
+awsWriters:
+  - name: app-push
+    region: eu-example-1
+    role: arn:aws:iam::444455556666:role/example-eso.example-infra
+    prefix: /app/client/
+    conditions: [{namespaces: [app]}]
+awsNamespacedStores:
+  - namespace: example-infra
+    role: arn:aws:iam::444455556666:role/example-eso.example-infra
+    region: eu-example-1

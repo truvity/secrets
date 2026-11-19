@@ -153,6 +153,20 @@ awsWriters: []
 #    conditions:                        # exactly one entry, one or more namespace names
 #      - namespaces: [example-app]
 
+# The namespaced store of a namespace: one SecretStore named `ssm`
+# per entry, in that namespace, on Parameter Store through that namespace's
+# own reader role (esoaws Readers.RoleARNs), with no auth block. PodIdentity
+# mode only. A namespaced store is usable by the ExternalSecrets of its own
+# namespace and no other, so no namespace reads through another's. The
+# admission policy admits exactly (namespace, `ssm`, role, region) as listed
+# here; a different role, name, region or namespace, or any auth field, is
+# refused. The role must not be a writer's (an awsWriters role). The
+# namespace itself is not created by this chart.
+awsNamespacedStores: []
+#  - namespace: example-infra
+#    role: arn:aws:iam::444455556666:role/example-eso.example-infra
+#    region: eu-example-1
+
 pki:
   enabled: false
   # On the objects cert-manager's login is made of (the ServiceAccount, its

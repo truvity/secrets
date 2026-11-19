@@ -1,0 +1,8 @@
+# The entry's shape is closed: the store's name is fixed and it takes no auth.
+aws:
+  identity: podIdentity
+awsNamespacedStores:
+  - namespace: example-infra
+    role: arn:aws:iam::444455556666:role/example-eso.example-infra
+    region: eu-example-1
+    name: other

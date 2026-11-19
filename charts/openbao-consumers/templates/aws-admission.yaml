@@ -8,7 +8,9 @@
        parameters from any namespace. This policy refuses those objects,
        any ClusterSecretStore on the aws provider this release does not
        render, and any of the release's own that has drifted from what it
-       renders. On by default in podIdentity mode, and weakening it there
+       renders. The one namespaced store it admits without auth is the
+       release's own `ssm` of a namespace in awsNamespacedStores, pinned to
+       that entry's role and region. On by default in podIdentity mode, and weakening it there
        takes an explicit acknowledgement; docs/esoaws.md#the-admission-policy. */}}
 {{- $p := .Values.aws.admissionPolicy }}
 {{- $mode := .Values.aws.identity }}
@@ -43,6 +45,15 @@
        above are pinned to their role and to no prefix at all. */}}
 {{- range .Values.awsWriters }}
 {{- $_ := set $expected .name (dict "role" .role "region" .region "prefix" .prefix) }}
+{{- end }}
+{{- /* The release's namespaced stores (awsNamespacedStores, podIdentity
+       only): the one exception to "a namespaced aws store names its own
+       auth". Keyed by namespace; the name is always `ssm`. */}}
+{{- $expectedNs := dict }}
+{{- if $pod }}
+{{- range .Values.awsNamespacedStores }}
+{{- $_ := set $expectedNs .namespace (dict "role" .role "region" .region) }}
+{{- end }}
 {{- end }}
 {{- /* "Names auth of its own" for an object whose auth sits under P: a
        Secret or a ServiceAccount. An absent auth and an empty one are the
@@ -120,6 +131,16 @@ spec:
         (has({{ $sts }}) && !{{ printf $own $sts }}))
     - name: expected
       expression: {{ $expected | toJson | squote }}
+    # The namespaced store of awsNamespacedStores: its slot is the name `ssm`
+    # in a listed namespace. Whatever sits in the slot is judged against the
+    # release's entry, and nowhere else is a namespaced store without auth
+    # admitted.
+    - name: expectedNs
+      expression: {{ $expectedNs | toJson | squote }}
+    - name: nsSlot
+      expression: >-
+        variables.kind == 'SecretStore' && variables.onAWS && variables.obj.metadata.name == 'ssm' &&
+        request.namespace in variables.expectedNs
     - name: releaseStore
       expression: >-
         variables.kind == 'ClusterSecretStore' && variables.onAWS && variables.obj.metadata.name in variables.expected
@@ -130,7 +151,7 @@ spec:
         has(variables.aws.additionalRoles) || has(variables.aws.sessionTags) ||
         has(variables.aws.transitiveTagKeys) || has(variables.aws.externalID)
   validations:
-    - expression: "variables.kind != 'SecretStore' || !variables.onAWS || variables.storeOwnAuth"
+    - expression: "variables.kind != 'SecretStore' || !variables.onAWS || variables.nsSlot || variables.storeOwnAuth"
       messageExpression: >-
         variables.subject + ' is on the aws provider with no auth of its own (secretRef or jwt): External Secrets would use its' +
         ' controller\'s AWS identity, which may assume this cluster\'s parameter reader roles'
@@ -146,6 +167,20 @@ spec:
         ' every namespace its conditions admit would read with the controller\'s AWS identity'
       reason: Forbidden
     {{- if $pod }}
+    # podIdentity: the release's namespaced `ssm` store reads as the
+    # controller, assuming its namespace's one rendered role in its one
+    # rendered region and nothing else: no auth of any kind (an empty one
+    # included), no prefix, no additional roles, tags or external id.
+    - expression: >-
+        !variables.nsSlot || (!variables.extras && !has(variables.aws.auth) && !has(variables.aws.prefix) &&
+        has(variables.aws.service) && variables.aws.service == 'ParameterStore' &&
+        has(variables.aws.role) && variables.aws.role == variables.expectedNs[request.namespace].role &&
+        has(variables.aws.region) && variables.aws.region == variables.expectedNs[request.namespace].region)
+      messageExpression: >-
+        variables.subject + ' is release {{ .Release.Name }}\'s, but differs from what it renders (awsNamespacedStores): it reads Parameter Store in region ' +
+        variables.expectedNs[request.namespace].region + ' as exactly ' + variables.expectedNs[request.namespace].role +
+        ', with no auth, prefix, additionalRoles, sessionTags, transitiveTagKeys or externalID'
+      reason: Forbidden
     # podIdentity: the release's store reads as the controller, assuming its
     # one rendered role and nothing else.
     - expression: >-
