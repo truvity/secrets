@@ -38,6 +38,13 @@
 {{- end }}
 {{- end }}
 {{- $kind := $issuer.kind | default "ClusterIssuer" }}
+{{- $sel := ($c.selector | default dict).namespace | default dict }}
+{{- if and $c.selector (eq $kind "Issuer") }}
+{{- fail (printf "approverPolicy.issuers.%s.selector: %s is a namespaced Issuer, whose policy already selects only its own namespace; a selector is for a ClusterIssuer" $issuer.name $issuer.name) }}
+{{- end }}
+{{- if and $c.selector (not (or $sel.matchNames $sel.matchLabels)) }}
+{{- fail (printf "approverPolicy.issuers.%s.selector.namespace names no matchNames or matchLabels: it would select every namespace, as no selector does; name the namespaces, or drop the selector" $issuer.name) }}
+{{- end }}
 {{- $constraints := mergeOverwrite (deepCopy $ap.defaults) (deepCopy (pick $c "minDuration" "maxDuration" "privateKey")) }}
 {{- /* A certificate of this chart that asks for usages the policy does not
        list would be denied at its first renewal, not at install. */}}
@@ -76,6 +83,9 @@ spec:
     {{- if eq $kind "Issuer" }}
     namespace:
       matchNames: [{{ $ns | quote }}]
+    {{- else if $sel }}
+    namespace:
+      {{- toYaml $sel | nindent 6 }}
     {{- end }}
   allowed:
     {{- with $c.commonName }}
