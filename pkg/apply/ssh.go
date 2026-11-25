@@ -53,33 +53,28 @@ func (a *applier) sshMount(s *scope, desired *model.SSHMount) error {
 
 	name := mountName(s, desired.Path)
 
-	mount, err := vault.NewMount(a.c, a.name(name), args, authority(s.inside)...)
+	backend, err := a.sshCA(s, name, desired.Path, desired.KeyType, args, "ssh")
 	if err != nil {
-		return fmt.Errorf("%s ssh mount %s: %w", s.label, desired.Path, err)
-	}
-
-	// Generated inside OpenBAO: the signing key is never in Pulumi's
-	// state, a file or an output. Only its public half is exported.
-	ca, err := vaultssh.NewSecretBackendCa(a.c, a.name(name+"-ca"), &vaultssh.SecretBackendCaArgs{
-		Namespace:          s.arg,
-		Backend:            mount.Path,
-		GenerateSigningKey: pulumi.Bool(true),
-		KeyType:            pulumi.String(desired.KeyType),
-	}, authority(s.inside, mount)...)
-	if err != nil {
-		return fmt.Errorf("%s ssh CA %s: %w", s.label, desired.Path, err)
+		return err
 	}
 
 	for i := range desired.Roles {
 		role := &desired.Roles[i]
 
-		if _, err := vaultssh.NewSecretBackendRole(a.c, a.name(name+"-sshrole-"+role.Name), sshRoleArgs(s.arg, mount.Path, role),
-			authority(s.inside, mount, ca)...); err != nil {
+		roleName := a.name(name + "-sshrole-" + role.Name)
+		if !a.owns(TypeSSHRole, roleName) {
+			continue
+		}
+
+		if _, err := vaultssh.NewSecretBackendRole(a.c, roleName, sshRoleArgs(s.arg, backend.path, role),
+			authority(s.inside, backend.mount, backend.ca)...); err != nil {
 			return fmt.Errorf("%s ssh role %s/%s: %w", s.label, desired.Path, role.Name, err)
 		}
 	}
 
-	a.result.SSHCAPublicKeys[MountRef{Namespace: s.namespace.Name, Path: desired.Path}] = ca.PublicKey
+	if backend.publicKey != nil {
+		a.result.SSHCAPublicKeys[MountRef{Namespace: s.namespace.Name, Path: desired.Path}] = *backend.publicKey
+	}
 
 	return nil
 }
@@ -181,33 +176,28 @@ func (a *applier) sshHostMount(s *scope, desired *model.SSHHostMount) error {
 
 	name := mountName(s, desired.Path)
 
-	mount, err := vault.NewMount(a.c, a.name(name), args, authority(s.inside)...)
+	backend, err := a.sshCA(s, name, desired.Path, desired.KeyType, args, "ssh host")
 	if err != nil {
-		return fmt.Errorf("%s ssh host mount %s: %w", s.label, desired.Path, err)
-	}
-
-	// Generated inside OpenBAO, same as the user CA: the signing key is
-	// never in Pulumi's state, a file or an output.
-	ca, err := vaultssh.NewSecretBackendCa(a.c, a.name(name+"-ca"), &vaultssh.SecretBackendCaArgs{
-		Namespace:          s.arg,
-		Backend:            mount.Path,
-		GenerateSigningKey: pulumi.Bool(true),
-		KeyType:            pulumi.String(desired.KeyType),
-	}, authority(s.inside, mount)...)
-	if err != nil {
-		return fmt.Errorf("%s ssh host CA %s: %w", s.label, desired.Path, err)
+		return err
 	}
 
 	for i := range desired.Roles {
 		role := &desired.Roles[i]
 
-		if _, err := vaultssh.NewSecretBackendRole(a.c, a.name(name+"-sshrole-"+role.Name), sshHostRoleArgs(s.arg, mount.Path, role),
-			authority(s.inside, mount, ca)...); err != nil {
+		roleName := a.name(name + "-sshrole-" + role.Name)
+		if !a.owns(TypeSSHRole, roleName) {
+			continue
+		}
+
+		if _, err := vaultssh.NewSecretBackendRole(a.c, roleName, sshHostRoleArgs(s.arg, backend.path, role),
+			authority(s.inside, backend.mount, backend.ca)...); err != nil {
 			return fmt.Errorf("%s ssh host role %s/%s: %w", s.label, desired.Path, role.Name, err)
 		}
 	}
 
-	a.result.SSHHostCAPublicKeys[MountRef{Namespace: s.namespace.Name, Path: desired.Path}] = ca.PublicKey
+	if backend.publicKey != nil {
+		a.result.SSHHostCAPublicKeys[MountRef{Namespace: s.namespace.Name, Path: desired.Path}] = *backend.publicKey
+	}
 
 	return nil
 }
@@ -253,4 +243,46 @@ func sshHostRoleArgs(namespace pulumi.StringPtrInput, backend pulumi.StringInput
 		Ttl:                       pulumi.String(strconv.Itoa(ttl)),
 		MaxTtl:                    pulumi.String(strconv.Itoa(maxTTL)),
 	}
+}
+
+// sshBackend is a registered SSH mount and CA, for its roles: the mount's
+// path, the two resources (untyped nils when another stack owns the mount,
+// Options.Select), and the CA's public key when it is registered here.
+type sshBackend struct {
+	path      pulumi.StringInput
+	mount     pulumi.Resource
+	ca        pulumi.Resource
+	publicKey *pulumi.StringOutput
+}
+
+// sshCA registers an SSH mount and its CA, which are one unit, unless
+// another stack owns them.
+func (a *applier) sshCA(s *scope, name, path, keyType string, args *vault.MountArgs, label string) (sshBackend, error) {
+	mountName, caName, owned, err := a.sshUnit(name)
+	if err != nil {
+		return sshBackend{}, err
+	}
+
+	if !owned {
+		return sshBackend{path: pulumi.String(path)}, nil
+	}
+
+	mount, err := vault.NewMount(a.c, mountName, args, authority(s.inside)...)
+	if err != nil {
+		return sshBackend{}, fmt.Errorf("%s %s mount %s: %w", s.label, label, path, err)
+	}
+
+	// Generated inside OpenBAO: the signing key is never in Pulumi's
+	// state, a file or an output. Only its public half is exported.
+	ca, err := vaultssh.NewSecretBackendCa(a.c, caName, &vaultssh.SecretBackendCaArgs{
+		Namespace:          s.arg,
+		Backend:            mount.Path,
+		GenerateSigningKey: pulumi.Bool(true),
+		KeyType:            pulumi.String(keyType),
+	}, authority(s.inside, mount)...)
+	if err != nil {
+		return sshBackend{}, fmt.Errorf("%s %s CA %s: %w", s.label, label, path, err)
+	}
+
+	return sshBackend{path: mount.Path, mount: mount, ca: ca, publicKey: &ca.PublicKey}, nil
 }

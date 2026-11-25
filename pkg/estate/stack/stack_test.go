@@ -203,3 +203,90 @@ func TestOIDCClientSecretRefusesWhatWouldFailAtSignIn(t *testing.T) {
 		}
 	}
 }
+
+// The estate applied as two stacks -- the grants (policies, groups and
+// aliases, roles) and everything else -- registers each resource of the
+// whole exactly once, the provider in both, and bootstraps an unsigned
+// identity CA only in the stack that holds its mount.
+func TestDeploySplitIntoTwoStacks(t *testing.T) {
+	in := example.Inputs(t, "../testdata/contract.yaml")
+
+	desired, err := estate.Build(in)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	grants := map[string]bool{
+		apply.TypePolicy: true, apply.TypeGroup: true, apply.TypeGroupAlias: true,
+		apply.TypeJWTAuthBackendRole: true, apply.TypeAWSAuthBackendRole: true,
+		apply.TypePKIRole: true, apply.TypeSSHRole: true,
+	}
+
+	run := func(selects func(apply.Resource) bool) []string {
+		t.Helper()
+
+		mocks := &recorder{}
+		opts := deployOptions(&fakeChains{})
+		opts.Select = selects
+
+		if err := pulumi.RunErr(func(c *pulumi.Context) error {
+			return Deploy(c, &desired, opts)
+		}, pulumi.WithMocks("example", "openbao-config", mocks)); err != nil {
+			t.Fatalf("deploy: %v", err)
+		}
+
+		return mocks.names
+	}
+
+	whole := run(nil)
+	grantNames := run(func(r apply.Resource) bool { return grants[r.Type] })
+	rest := run(func(r apply.Resource) bool { return !grants[r.Type] })
+
+	const provider = "pulumi:providers:vault openbao"
+
+	count := map[string]int{}
+	for _, name := range append(append([]string{}, grantNames...), rest...) {
+		count[name]++
+	}
+
+	for _, name := range whole {
+		if want := map[bool]int{true: 2, false: 1}[name == provider]; count[name] != want {
+			t.Errorf("%s is registered %d times across the two stacks, want %d", name, count[name], want)
+		}
+	}
+
+	if len(count) != len(whole) {
+		t.Errorf("the two stacks register %d names, the whole %d", len(count), len(whole))
+	}
+
+	const bootstrap = "vault:pkiSecret/secretBackendIntermediateCertRequest:SecretBackendIntermediateCertRequest pki-identity-beta-root-signed-csr"
+	if slices.Contains(grantNames, bootstrap) || !slices.Contains(rest, bootstrap) {
+		t.Errorf("the bootstrap request belongs to the stack holding its mount")
+	}
+}
+
+// A selection that splits an unsigned identity CA's mount from its request
+// is refused before anything is registered.
+func TestDeployRefusesASplitBootstrapBeforeRegistering(t *testing.T) {
+	in := example.Inputs(t, "../testdata/contract.yaml")
+
+	desired, err := estate.Build(in)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	mocks := &recorder{}
+	opts := deployOptions(&fakeChains{})
+	opts.Select = func(r apply.Resource) bool { return r.Type != apply.TypePKIIntermediateCertRequest }
+
+	err = pulumi.RunErr(func(c *pulumi.Context) error {
+		return Deploy(c, &desired, opts)
+	}, pulumi.WithMocks("example", "openbao-config", mocks))
+	if err == nil || !strings.Contains(err.Error(), "select") {
+		t.Fatalf("want a select refusal, got %v", err)
+	}
+
+	if len(mocks.names) != 0 {
+		t.Errorf("%d resources registered before the refusal: %v", len(mocks.names), mocks.names)
+	}
+}

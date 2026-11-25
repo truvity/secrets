@@ -64,6 +64,21 @@ type (
 		// ResourceOptions are appended to every resource Deploy registers,
 		// the provider included (a parent, for instance).
 		ResourceOptions []pulumi.ResourceOption
+		// Select applies one part of the model, so that one desired state
+		// can be held by several stacks (docs/decisions/0005): Deploy
+		// registers a resource only when Select returns true for it, and
+		// the provider always. nil registers everything, as before.
+		//
+		// A resource that is registered while one it refers to is not
+		// gets that reference from the server instead: a mount's path as
+		// the plain string the model declares, an auth mount's accessor
+		// read with getAuthBackend, and no dependency on the absent
+		// resource. The stack that owns the absent resource must therefore
+		// be applied first. A selection that splits a unit -- a mount and
+		// its CA, issuers and configuration; an AWS auth mount and its
+		// client; a KV mount and its canary; a group and its alias -- is
+		// refused before anything is registered.
+		Select func(Resource) bool
 	}
 
 	// Login is a JWT login into root that the provider uses as its token.
@@ -118,6 +133,12 @@ func Deploy(c *pulumi.Context, desired *model.Desired, opts Options) (*Result, e
 
 	a, err := newApplier(c, desired, opts)
 	if err != nil {
+		return nil, err
+	}
+
+	// A selection that splits a unit is refused here, before the provider
+	// or anything else is registered.
+	if err := a.checkSelection(); err != nil {
 		return nil, err
 	}
 

@@ -48,6 +48,12 @@ type (
 		EnvironmentCSROutput string
 		// Logger records each signed chain installed; nil is slog.Default.
 		Logger *slog.Logger
+		// Select is apply.Options.Select: this stack applies only part of
+		// the estate (docs/decisions/0005). The outputs of what it does
+		// not register -- a CA's request, an SSH CA's key -- are left out,
+		// and an identity environment CA is bootstrapped only by the stack
+		// that selects its mount. nil applies, and exports, everything.
+		Select func(apply.Resource) bool
 	}
 )
 
@@ -68,6 +74,26 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 
 	in := desired.Inputs()
 	rename := apply.RenameFrom(desired.LegacyResourceNames())
+	identity := in.PKI.Contract.URITrustDomain(in.PKI.Identity)
+
+	// Which unsigned identity CAs this stack bootstraps, decided -- and a
+	// split of one refused -- before anything is registered.
+	bootstraps := map[string]bool{}
+
+	if identity != nil {
+		for _, environment := range identity.Environments {
+			if in.PKI.Signed[environment] {
+				continue
+			}
+
+			owned, err := selectsBootstrap(opts.Select, rename, environment, identity.IssuingMountPath(), identity.EnvironmentCAIssuerName(environment))
+			if err != nil {
+				return err
+			}
+
+			bootstraps[environment] = owned
+		}
+	}
 
 	result, err := apply.Deploy(c, state, apply.Options{
 		Address:           opts.Address,
@@ -76,6 +102,7 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 		OIDCClientSecrets: opts.OIDCClientSecrets,
 		SignedChain:       desired.SignedChain(c.Context(), opts.Logger, opts.Chains),
 		Rename:            rename,
+		Select:            opts.Select,
 	})
 	if err != nil {
 		return err
@@ -93,10 +120,15 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 			return fmt.Errorf("stack: trust domain %s has no request output", domain.TrustDomain)
 		}
 
-		c.Export(output, result.CertificateRequests[domain.IssuerName])
+		// Registered by another stack: its request is that stack's output.
+		csr, registered := result.CertificateRequests[domain.IssuerName]
+		if !registered && opts.Select != nil {
+			continue
+		}
+
+		c.Export(output, csr)
 	}
 
-	identity := in.PKI.Contract.URITrustDomain(in.PKI.Identity)
 	if identity == nil || len(identity.Environments) == 0 {
 		return nil
 	}
@@ -110,8 +142,15 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 
 	for _, environment := range identity.Environments {
 		if in.PKI.Signed[environment] {
-			csrs[environment] = result.CertificateRequests[identity.EnvironmentCAIssuerName(environment)]
+			csr, registered := result.CertificateRequests[identity.EnvironmentCAIssuerName(environment)]
+			if registered || opts.Select == nil {
+				csrs[environment] = csr
+			}
 
+			continue
+		}
+
+		if !bootstraps[environment] {
 			continue
 		}
 
@@ -139,9 +178,31 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 		csrs[environment] = csr
 	}
 
-	c.Export(opts.EnvironmentCSROutput, csrs)
+	if len(csrs) > 0 || opts.Select == nil {
+		c.Export(opts.EnvironmentCSROutput, csrs)
+	}
 
 	return nil
+}
+
+// selectsBootstrap reports whether this stack bootstraps an identity
+// environment CA: always without a selector; otherwise when it selects the
+// CA's mount, and then its request too (the two are one unit).
+func selectsBootstrap(selects func(apply.Resource) bool, rename func(string) string, environment, mount, keyName string) (bool, error) {
+	if selects == nil {
+		return true, nil
+	}
+
+	mountResource := apply.Resource{Type: apply.TypeMount, Name: rename(environment + "-" + mount)}
+	csrResource := apply.Resource{Type: apply.TypePKIIntermediateCertRequest, Name: rename(keyName + "-csr")}
+
+	owned := selects(mountResource)
+	if selects(csrResource) != owned {
+		return false, fmt.Errorf("stack: select: %s %s and %s are selected apart; a mount is applied with its CA, its issuers and its configuration",
+			csrResource.Type, csrResource.Name, mountResource.Name)
+	}
+
+	return owned, nil
 }
 
 // environmentKeys is the environments' public keys of one SSH mount, by

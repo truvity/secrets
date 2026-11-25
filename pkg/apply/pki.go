@@ -20,8 +20,15 @@ type (
 	// and its URL, CRL and auto-tidy configuration, which every signature
 	// made on the mount waits for.
 	pkiMount struct {
-		ref         MountRef
-		mount       *vault.Mount
+		ref MountRef
+		// path is the mount's path for what is registered on it: the
+		// mount's own output, or the declared path when another stack
+		// owns the mount (Options.Select).
+		path pulumi.StringInput
+		// resource is the mount, an untyped nil when another stack owns
+		// it, so it drops out of a dependency list.
+		resource    pulumi.Resource
+		owned       bool
 		pinned      pulumi.Resource
 		maintenance []pulumi.Resource
 	}
@@ -67,12 +74,26 @@ func (a *applier) pkiMount(s *scope, desired *model.PKIMount) error {
 		args.Description = pulumi.String(desired.Description)
 	}
 
-	created, err := vault.NewMount(a.c, a.name(mountName(s, desired.Path)), args, authority(s.base, s.created)...)
+	name, owned, err := a.pkiUnit(s, desired)
 	if err != nil {
-		return fmt.Errorf("%s PKI mount %s: %w", s.label, desired.Path, err)
+		return err
 	}
 
-	mount := &pkiMount{ref: MountRef{Namespace: s.namespace.Name, Path: desired.Path}, mount: created}
+	mount := &pkiMount{ref: MountRef{Namespace: s.namespace.Name, Path: desired.Path}, path: pulumi.String(desired.Path), owned: owned}
+
+	// A mount another stack owns registers nothing of its own here --
+	// neither its issuers nor its configuration -- but its roles still
+	// can, on its declared path.
+	if owned {
+		created, err := vault.NewMount(a.c, name, args, authority(s.base, s.created)...)
+		if err != nil {
+			return fmt.Errorf("%s PKI mount %s: %w", s.label, desired.Path, err)
+		}
+
+		mount.path = created.Path
+		mount.resource = created
+	}
+
 	a.mounts[mount.ref] = mount
 
 	for i := range desired.Issuers {
@@ -85,7 +106,7 @@ func (a *applier) pkiMount(s *scope, desired *model.PKIMount) error {
 
 		a.issuers[model.IssuerRef{Namespace: s.namespace.Name, Mount: desired.Path, Issuer: issuer.Name}] = registered
 
-		if issuer.Name == desired.DefaultIssuer {
+		if issuer.Name == desired.DefaultIssuer && mount.owned {
 			if err := a.pinAndMaintain(s, mount, registered); err != nil {
 				return err
 			}
@@ -109,10 +130,14 @@ func (a *applier) issuer(s *scope, mount *pkiMount, desired *model.PKIIssuer) (*
 	bits := model.CurveBits[desired.KeyCurve]
 	where := s.label + "/" + mount.ref.Path + "/" + desired.Name
 
+	if !mount.owned {
+		return &pkiIssuer{mount: mount}, nil
+	}
+
 	if desired.SelfSigned {
 		args := &pkisecret.SecretBackendRootCertArgs{
 			Namespace:         s.arg,
-			Backend:           mount.mount.Path,
+			Backend:           mount.path,
 			Type:              pulumi.String("internal"),
 			CommonName:        pulumi.String(desired.CommonName),
 			IssuerName:        pulumi.String(desired.Name),
@@ -137,7 +162,7 @@ func (a *applier) issuer(s *scope, mount *pkiMount, desired *model.PKIIssuer) (*
 		}
 
 		root, err := pkisecret.NewSecretBackendRootCert(a.c, a.name(desired.Name+"-certificate"), args,
-			authority(s.base, s.created, mount.mount)...)
+			authority(s.base, s.created, mount.resource)...)
 		if err != nil {
 			return nil, fmt.Errorf("root certificate %s: %w", where, err)
 		}
@@ -149,7 +174,7 @@ func (a *applier) issuer(s *scope, mount *pkiMount, desired *model.PKIIssuer) (*
 
 	csrArgs := &pkisecret.SecretBackendIntermediateCertRequestArgs{
 		Namespace:         s.arg,
-		Backend:           mount.mount.Path,
+		Backend:           mount.path,
 		Type:              pulumi.String("internal"),
 		CommonName:        pulumi.String(desired.CommonName),
 		KeyName:           pulumi.String(desired.Name),
@@ -167,7 +192,7 @@ func (a *applier) issuer(s *scope, mount *pkiMount, desired *model.PKIIssuer) (*
 	// what leaves is this request, carrying the subject and no
 	// alternative name.
 	csr, err := pkisecret.NewSecretBackendIntermediateCertRequest(a.c, a.name(desired.Name+"-csr"), csrArgs,
-		authority(s.base, s.created, mount.mount)...)
+		authority(s.base, s.created, mount.resource)...)
 	if err != nil {
 		return nil, fmt.Errorf("certificate request %s: %w", where, err)
 	}
@@ -199,7 +224,7 @@ func (a *applier) issuer(s *scope, mount *pkiMount, desired *model.PKIIssuer) (*
 
 	set, err := pkisecret.NewSecretBackendIntermediateSetSigned(a.c, a.name(desired.Name+"-import"), &pkisecret.SecretBackendIntermediateSetSignedArgs{
 		Namespace:   s.arg,
-		Backend:     mount.mount.Path,
+		Backend:     mount.path,
 		Certificate: certificate,
 	}, authority(s.base, s.created, imported)...)
 	if err != nil {
@@ -210,7 +235,7 @@ func (a *applier) issuer(s *scope, mount *pkiMount, desired *model.PKIIssuer) (*
 	// never a parent that follows it.
 	named, err := pkisecret.NewSecretBackendIssuer(a.c, a.name(desired.Name+"-issuer"), &pkisecret.SecretBackendIssuerArgs{
 		Namespace:  s.arg,
-		Backend:    mount.mount.Path,
+		Backend:    mount.path,
 		IssuerRef:  set.ImportedIssuers.Index(pulumi.Int(0)),
 		IssuerName: pulumi.String(desired.Name),
 		Usage:      pulumi.String(importedIssuerUsage),
@@ -234,7 +259,7 @@ func (a *applier) sign(
 	}
 
 	args := &pkisecret.SecretBackendRootSignIntermediateArgs{
-		Backend:           signer.mount.mount.Path,
+		Backend:           signer.mount.path,
 		IssuerRef:         pulumi.String(desired.SignedBy.Issuer),
 		Csr:               csr.Csr,
 		CommonName:        pulumi.String(desired.CommonName),
@@ -290,7 +315,7 @@ func (a *applier) pinAndMaintain(s *scope, mount *pkiMount, issuer *pkiIssuer) e
 
 	pinned, err := pkisecret.NewSecretBackendConfigIssuers(a.c, a.name(label+"-default"), &pkisecret.SecretBackendConfigIssuersArgs{
 		Namespace:                  s.arg,
-		Backend:                    mount.mount.Path,
+		Backend:                    mount.path,
 		Default:                    issuerID,
 		DefaultFollowsLatestIssuer: pulumi.Bool(false),
 	}, authority(s.base, s.created, issuer.resource)...)
@@ -306,11 +331,11 @@ func (a *applier) pinAndMaintain(s *scope, mount *pkiMount, issuer *pkiIssuer) e
 	}
 
 	base := a.opts.Address + "/v1/" + apiPrefix
-	waits := []pulumi.Resource{mount.mount, issuer.resource, pinned}
+	waits := []pulumi.Resource{mount.resource, issuer.resource, pinned}
 
 	urls, err := pkisecret.NewSecretBackendConfigUrls(a.c, a.name(label+"-urls"), &pkisecret.SecretBackendConfigUrlsArgs{
 		Namespace:             s.arg,
-		Backend:               mount.mount.Path,
+		Backend:               mount.path,
 		EnableTemplating:      pulumi.Bool(true),
 		IssuingCertificates:   pulumi.ToStringArray([]string{base + "/issuer/{{issuer_id}}/der"}),
 		CrlDistributionPoints: pulumi.ToStringArray([]string{base + "/issuer/{{issuer_id}}/crl/der"}),
@@ -322,7 +347,7 @@ func (a *applier) pinAndMaintain(s *scope, mount *pkiMount, issuer *pkiIssuer) e
 
 	crl, err := pkisecret.NewSecretBackendCrlConfig(a.c, a.name(label+"-crl"), &pkisecret.SecretBackendCrlConfigArgs{
 		Namespace:              s.arg,
-		Backend:                mount.mount.Path,
+		Backend:                mount.path,
 		AutoRebuild:            pulumi.Bool(true),
 		AutoRebuildGracePeriod: pulumi.String("12h"),
 		Disable:                pulumi.Bool(false),
@@ -338,7 +363,7 @@ func (a *applier) pinAndMaintain(s *scope, mount *pkiMount, issuer *pkiIssuer) e
 
 	tidy, err := pkisecret.NewBackendConfigAutoTidy(a.c, a.name(label+"-auto-tidy"), &pkisecret.BackendConfigAutoTidyArgs{
 		Namespace:                            s.arg,
-		Backend:                              mount.mount.Path,
+		Backend:                              mount.path,
 		Enabled:                              pulumi.Bool(true),
 		IntervalDuration:                     pulumi.String("24h"),
 		SafetyBuffer:                         pulumi.String("720h"),
@@ -364,6 +389,11 @@ func (a *applier) pinAndMaintain(s *scope, mount *pkiMount, issuer *pkiIssuer) e
 // rather than to whatever the mount's default happens to be, with
 // everything it does not allow spelled out rather than left to a default.
 func (a *applier) pkiRole(s *scope, mount *model.PKIMount, role *model.PKIRole) error {
+	name := a.name(PKIRoleResourceName(role.Issuer, role.Name))
+	if !a.owns(TypePKIRole, name) {
+		return nil
+	}
+
 	issuer := a.issuers[model.IssuerRef{Namespace: s.namespace.Name, Mount: mount.Path, Issuer: role.Issuer}]
 
 	ttl, err := model.DurationSeconds(role.TTL)
@@ -378,7 +408,7 @@ func (a *applier) pkiRole(s *scope, mount *model.PKIMount, role *model.PKIRole) 
 
 	args := &pkisecret.SecretBackendRoleArgs{
 		Namespace:                 s.arg,
-		Backend:                   issuer.mount.mount.Path,
+		Backend:                   issuer.mount.path,
 		Name:                      pulumi.String(role.Name),
 		IssuerRef:                 pulumi.String(role.Issuer),
 		AllowedDomains:            pulumi.ToStringArray(role.AllowedDomains),
@@ -438,8 +468,8 @@ func (a *applier) pkiRole(s *scope, mount *model.PKIMount, role *model.PKIRole) 
 
 	// Not protected: a leaf role holds no key, and changing what it signs
 	// is an ordinary, reviewed update.
-	if _, err := pkisecret.NewSecretBackendRole(a.c, a.name(PKIRoleResourceName(role.Issuer, role.Name)), args,
-		options(s.inside, pulumi.DependsOn([]pulumi.Resource{issuer.resource}))...); err != nil {
+	if _, err := pkisecret.NewSecretBackendRole(a.c, name, args,
+		options(s.inside, dependsOn(issuer.resource)...)...); err != nil {
 		return fmt.Errorf("%s PKI role %s/%s: %w", s.label, mount.Path, role.Name, err)
 	}
 
@@ -454,9 +484,15 @@ func (a *applier) pkiRole(s *scope, mount *model.PKIMount, role *model.PKIRole) 
 // and any-name all off, so the only common name the role accepts is the
 // caller's own. The CSR's own SANs are ignored and no IP, URI or other SAN
 // is allowed. `no_store` and no lease: the revocation model is the TTL.
-func (a *applier) credentialRoles(s *scope, mount *model.PKIMount, accessors map[string]pulumi.StringOutput) error {
+func (a *applier) credentialRoles(s *scope, mount *model.PKIMount, accessors map[string]func() pulumi.StringOutput) error {
 	for i := range mount.CredentialRoles {
 		role := &mount.CredentialRoles[i]
+
+		name := a.name(PKICredentialRoleResourceName(role.Issuer, role.Name))
+		if !a.owns(TypePKIRole, name) {
+			continue
+		}
+
 		issuer := a.issuers[model.IssuerRef{Namespace: s.namespace.Name, Mount: mount.Path, Issuer: role.Issuer}]
 
 		accessor, ok := accessors[role.SubjectMount]
@@ -474,11 +510,11 @@ func (a *applier) credentialRoles(s *scope, mount *model.PKIMount, accessors map
 			return fmt.Errorf("%s credential role %s: %w", s.label, role.Name, err)
 		}
 
-		subject := pulumi.Sprintf("{{identity.entity.aliases.%s.name}}", accessor)
+		subject := pulumi.Sprintf("{{identity.entity.aliases.%s.name}}", accessor())
 
 		args := &pkisecret.SecretBackendRoleArgs{
 			Namespace:                     s.arg,
-			Backend:                       issuer.mount.mount.Path,
+			Backend:                       issuer.mount.path,
 			Name:                          pulumi.String(role.Name),
 			IssuerRef:                     pulumi.String(role.Issuer),
 			AllowedDomains:                pulumi.StringArray{subject},
@@ -519,7 +555,7 @@ func (a *applier) credentialRoles(s *scope, mount *model.PKIMount, accessors map
 
 		// Protected: a credential role that disappears in a replace is a
 		// window in which nobody can sign.
-		if _, err := pkisecret.NewSecretBackendRole(a.c, a.name(PKICredentialRoleResourceName(role.Issuer, role.Name)), args,
+		if _, err := pkisecret.NewSecretBackendRole(a.c, name, args,
 			authority(s.inside, issuer.resource)...); err != nil {
 			return fmt.Errorf("%s credential role %s: %w", s.label, role.Name, err)
 		}
