@@ -46,7 +46,12 @@ func (a *applier) plugin(desired *model.Plugin, base []pulumi.ResourceOption) er
 		Sha256:  pulumi.String(desired.SHA256),
 	}
 
-	created, err := vault.NewPlugin(a.c, a.name("plugin-"+desired.Type+"-"+desired.Name), args, base...)
+	name := a.name("plugin-" + desired.Type + "-" + desired.Name)
+	if !a.owns(TypePlugin, name) {
+		return nil
+	}
+
+	created, err := vault.NewPlugin(a.c, name, args, base...)
 	if err != nil {
 		return fmt.Errorf("plugin catalog %s/%s: %w", desired.Type, desired.Name, err)
 	}

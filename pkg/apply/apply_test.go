@@ -42,6 +42,11 @@ type (
 	mocks struct {
 		mu        sync.Mutex
 		resources []registered
+		// calls are the invokes made, "<token> <namespace>/<path>".
+		calls []string
+		// missingAuth is an auth mount path getAuthBackend answers with
+		// an error for, as a server without it would.
+		missingAuth string
 	}
 )
 
@@ -90,8 +95,29 @@ func (m *mocks) NewResource(args pulumi.MockResourceArgs) (string, resource.Prop
 	return args.Name + "_id", state, nil
 }
 
-func (*mocks) Call(args pulumi.MockCallArgs) (resource.PropertyMap, error) {
-	return args.Args, nil
+// Call answers getAuthBackend with an accessor that names the lookup, so a
+// reference read from the server is told from one to a registered mount.
+func (m *mocks) Call(args pulumi.MockCallArgs) (resource.PropertyMap, error) {
+	out := args.Args.Copy()
+
+	if args.Token == "vault:index/getAuthBackend:getAuthBackend" {
+		path := args.Args["path"].StringValue()
+		if path == m.missingAuth {
+			return nil, errors.New("no auth backend found at path " + path)
+		}
+		out["accessor"] = resource.NewStringProperty("lookup:" + path)
+
+		m.mu.Lock()
+		namespace := ""
+		if ns, ok := args.Args["namespace"]; ok && ns.IsString() {
+			namespace = ns.StringValue()
+		}
+
+		m.calls = append(m.calls, args.Token+" "+namespace+"/"+path)
+		m.mu.Unlock()
+	}
+
+	return out, nil
 }
 
 func (m *mocks) sorted() []registered {
@@ -159,7 +185,12 @@ func options() apply.Options {
 func deploy(t *testing.T, desired *model.Desired, opts apply.Options, preview bool) (*mocks, *apply.Result, error) {
 	t.Helper()
 
-	m := &mocks{}
+	return deployWith(t, &mocks{}, desired, opts, preview)
+}
+
+// deployWith is deploy with the caller's mocks.
+func deployWith(t *testing.T, m *mocks, desired *model.Desired, opts apply.Options, preview bool) (*mocks, *apply.Result, error) {
+	t.Helper()
 
 	var result *apply.Result
 

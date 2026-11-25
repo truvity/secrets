@@ -565,6 +565,7 @@ model owns on `ctx` ([model.md](model.md#applying-it)).
 | `SignedChain` | none | returns an external issuer's PEM chain, the issuer's certificate first; required when the model has one. Verify it before returning it |
 | `Rename` | none | maps a derived logical name to the name a running state holds; the adoption hook |
 | `ResourceOptions` | none | appended to every resource and the provider (a parent, for instance) |
+| `Select` | everything | registers only the resources it returns true for (`apply.Resource{Type, Name}`, the name after `Rename`), and the provider always: one model held by several stacks ([ADR 0005](decisions/0005-one-model-several-stacks.md)). A reference to an unselected resource is read from the server: a mount's path as declared, an auth mount's accessor through `getAuthBackend`, no dependency. A selection that splits a mount from its CA, issuers or configuration, an AWS auth mount from its client, a KV mount from its canary, or a group from its alias is refused, by a check of the whole model before anything is registered |
 
 `Deploy` returns `Result`: `Provider`, `Namespaces`, `Certificates`
 (self-signed issuers' certificates by issuer name), `CertificateRequests`

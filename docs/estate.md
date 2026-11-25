@@ -97,6 +97,8 @@ what consumers read:
 | `opts.DomainCSROutputs[domain]` | each trust domain's intermediate request, for the root ceremony |
 | `opts.EnvironmentCSROutput` | every identity environment CA's request, by environment, whichever phase it is in |
 
+With `opts.Select` (`apply.Options.Select`, [ADR 0005](decisions/0005-one-model-several-stacks.md)) the stack applies part of the estate: the outputs of what it does not register are left out (a CA's request, an SSH CA's key), and an unsigned identity environment CA is bootstrapped only by the stack that selects its mount.
+
 The stack exports no trust root: the self-signed chain that once had one
 (`trustRootCaPem`) is gone (v0.44.0), and what a relying party trusts is the
 contract's root and its committed chains. `ConfigOutputs.TrustRootCAPEM`

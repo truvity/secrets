@@ -19,22 +19,26 @@ import (
 func (a *applier) projectNamespace(parent *scope, project *model.ProjectNamespace) error {
 	path := parent.namespace.Name + "/" + project.Name
 
-	created, err := vault.NewNamespace(a.c, a.name("ns-"+parent.namespace.Name+"-"+project.Name), &vault.NamespaceArgs{
-		Namespace: parent.arg,
-		Path:      pulumi.String(project.Name),
-	}, parent.inside...)
-	if err != nil {
-		return fmt.Errorf("project namespace %s: %w", path, err)
-	}
-
 	s := &scope{
 		namespace: &model.Namespace{Name: path},
 		label:     path,
 		arg:       pulumi.String(path),
-		created:   created,
 		base:      parent.base,
 	}
-	s.inside = options(s.base, pulumi.DependsOn([]pulumi.Resource{created}))
+	s.inside = s.base
+
+	if name := a.name("ns-" + parent.namespace.Name + "-" + project.Name); a.owns(TypeNamespace, name) {
+		created, err := vault.NewNamespace(a.c, name, &vault.NamespaceArgs{
+			Namespace: parent.arg,
+			Path:      pulumi.String(project.Name),
+		}, parent.inside...)
+		if err != nil {
+			return fmt.Errorf("project namespace %s: %w", path, err)
+		}
+
+		s.created = created
+		s.inside = options(s.base, pulumi.DependsOn([]pulumi.Resource{created}))
+	}
 
 	a.result.Namespaces = append(a.result.Namespaces, path)
 

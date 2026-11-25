@@ -119,16 +119,21 @@ func (a *applier) namespace(namespace *model.Namespace) error {
 	s.inside = s.base
 
 	if namespace.Name != "" {
-		created, err := vault.NewNamespace(a.c, a.name("ns-"+namespace.Name), &vault.NamespaceArgs{
-			Path: pulumi.String(namespace.Name),
-		}, s.base...)
-		if err != nil {
-			return fmt.Errorf("namespace %s: %w", namespace.Name, err)
+		// A namespace another stack owns is only named: what is inside
+		// takes its path and waits for nothing.
+		if name := a.name("ns-" + namespace.Name); a.owns(TypeNamespace, name) {
+			created, err := vault.NewNamespace(a.c, name, &vault.NamespaceArgs{
+				Path: pulumi.String(namespace.Name),
+			}, s.base...)
+			if err != nil {
+				return fmt.Errorf("namespace %s: %w", namespace.Name, err)
+			}
+
+			s.created = created
+			s.inside = options(s.base, pulumi.DependsOn([]pulumi.Resource{created}))
 		}
 
-		s.created = created
 		s.arg = pulumi.String(namespace.Name)
-		s.inside = options(s.base, pulumi.DependsOn([]pulumi.Resource{created}))
 		a.result.Namespaces = append(a.result.Namespaces, namespace.Name)
 	}
 
@@ -158,7 +163,12 @@ func (a *applier) namespace(namespace *model.Namespace) error {
 	for i := range namespace.Policies {
 		policy := &namespace.Policies[i]
 
-		created, err := vault.NewPolicy(a.c, a.name(s.label+"-policy-"+resourceName(policy.Name)), &vault.PolicyArgs{
+		name := a.name(s.label + "-policy-" + resourceName(policy.Name))
+		if !a.owns(TypePolicy, name) {
+			continue
+		}
+
+		created, err := vault.NewPolicy(a.c, name, &vault.PolicyArgs{
 			Namespace: s.arg,
 			Name:      pulumi.String(policy.Name),
 			Policy:    pulumi.String(policy.HCL()),
@@ -170,7 +180,7 @@ func (a *applier) namespace(namespace *model.Namespace) error {
 		policies[policy.Name] = created
 	}
 
-	accessors := map[string]pulumi.StringOutput{}
+	accessors := map[string]func() pulumi.StringOutput{}
 
 	for i := range namespace.Auth {
 		accessor, err := a.door(s, &namespace.Auth[i], policies)
@@ -230,7 +240,16 @@ func (a *applier) kvMount(s *scope, desired *model.KVMount) error {
 		args.Description = pulumi.String(desired.Description)
 	}
 
-	mount, err := vault.NewMount(a.c, a.name(mountName(s, desired.Path)), args, s.inside...)
+	name, owned, err := a.kvUnit(s, desired)
+	if err != nil {
+		return err
+	}
+
+	if !owned {
+		return nil
+	}
+
+	mount, err := vault.NewMount(a.c, name, args, s.inside...)
 	if err != nil {
 		return fmt.Errorf("%s kv %s: %w", s.label, desired.Path, err)
 	}
@@ -259,8 +278,10 @@ func (a *applier) kvMount(s *scope, desired *model.KVMount) error {
 }
 
 // door registers one auth mount and its roles, and returns the mount's
-// accessor for the group aliases and the credential roles.
-func (a *applier) door(s *scope, mount *model.JWTMount, policies map[string]*vault.Policy) (pulumi.StringOutput, error) {
+// accessor for the group aliases and the credential roles. When another
+// stack owns the mount, the accessor is read from the server, and only
+// once something registered here asks for it.
+func (a *applier) door(s *scope, mount *model.JWTMount, policies map[string]*vault.Policy) (func() pulumi.StringOutput, error) {
 	// authType is model.MethodJWT or model.MethodOIDC as a plain string,
 	// kept alongside args.Type (a pulumi.StringInput) so pluginDependency
 	// below can look it up -- neither is ever a plugin's name today (both
@@ -308,22 +329,75 @@ func (a *applier) door(s *scope, mount *model.JWTMount, policies map[string]*vau
 		args.Tune = &jwt.AuthBackendTuneArgs{ListingVisibility: pulumi.String("unauth")}
 	}
 
-	backend, err := jwt.NewAuthBackend(a.c, a.name(s.label+"-auth-"+mount.Path), args,
-		a.pluginDependency(s.inside, "auth", authType)...)
-	if err != nil {
-		return pulumi.StringOutput{}, fmt.Errorf("%s auth %s: %w", s.label, mount.Path, err)
+	var (
+		backendPath pulumi.StringPtrInput
+		accessor    func() pulumi.StringOutput
+	)
+
+	if name := a.name(s.label + "-auth-" + mount.Path); a.owns(TypeJWTAuthBackend, name) {
+		backend, err := jwt.NewAuthBackend(a.c, name, args,
+			a.pluginDependency(s.inside, "auth", authType)...)
+		if err != nil {
+			return nil, fmt.Errorf("%s auth %s: %w", s.label, mount.Path, err)
+		}
+
+		backendPath = backend.Path
+		accessor = func() pulumi.StringOutput { return backend.Accessor }
+	} else {
+		backendPath = pulumi.String(mount.Path)
+		accessor = a.lookupAccessor(s, mount.Path)
 	}
 
 	for i := range mount.Roles {
-		if err := a.role(s, mount.Path, backend, &mount.Roles[i], policies); err != nil {
-			return pulumi.StringOutput{}, err
+		if err := a.role(s, mount.Path, backendPath, &mount.Roles[i], policies); err != nil {
+			return nil, err
 		}
 	}
 
-	return backend.Accessor, nil
+	return accessor, nil
 }
 
-func (a *applier) role(s *scope, mount string, backend *jwt.AuthBackend, role *model.Role, policies map[string]*vault.Policy) error {
+// lookupAccessor reads the accessor of an auth mount another stack owns,
+// once, on first use: a stack that registers nothing needing it reads
+// nothing. A mount that is not there yet is an error naming it: its owner
+// is applied first.
+func (a *applier) lookupAccessor(s *scope, path string) func() pulumi.StringOutput {
+	var looked *pulumi.StringOutput
+
+	var namespace *string
+	if s.namespace.Name != "" {
+		name := s.namespace.Name
+		namespace = &name
+	}
+
+	return func() pulumi.StringOutput {
+		if looked == nil {
+			// After the provider is known: the read goes through it.
+			accessor := a.provider.URN().ApplyT(func(pulumi.URN) (string, error) {
+				backend, err := vault.LookupAuthBackend(a.c, &vault.LookupAuthBackendArgs{
+					Namespace: namespace,
+					Path:      path,
+				}, pulumi.Provider(a.provider))
+				if err != nil {
+					return "", fmt.Errorf("apply: read the accessor of %s auth mount %s, which another stack owns: %w; apply the stack that owns %s first",
+						s.label, path, err, path)
+				}
+
+				return backend.Accessor, nil
+			}).(pulumi.StringOutput)
+			looked = &accessor
+		}
+
+		return *looked
+	}
+}
+
+func (a *applier) role(s *scope, mount string, backendPath pulumi.StringPtrInput, role *model.Role, policies map[string]*vault.Policy) error {
+	name := a.name(s.label + "-role-" + mount + "-" + role.Name)
+	if !a.owns(TypeJWTAuthBackendRole, name) {
+		return nil
+	}
+
 	ttl, err := model.DurationSeconds(role.TTL)
 	if err != nil {
 		return fmt.Errorf("%s role %s/%s: %w", s.label, mount, role.Name, err)
@@ -336,7 +410,7 @@ func (a *applier) role(s *scope, mount string, backend *jwt.AuthBackend, role *m
 
 	args := &jwt.AuthBackendRoleArgs{
 		Namespace:      s.arg,
-		Backend:        backend.Path,
+		Backend:        backendPath,
 		RoleName:       pulumi.String(role.Name),
 		RoleType:       pulumi.String(roleType),
 		BoundAudiences: pulumi.ToStringArray(role.BoundAudiences),
@@ -376,7 +450,7 @@ func (a *applier) role(s *scope, mount string, backend *jwt.AuthBackend, role *m
 		}
 	}
 
-	if _, err := jwt.NewAuthBackendRole(a.c, a.name(s.label+"-role-"+mount+"-"+role.Name), args,
+	if _, err := jwt.NewAuthBackendRole(a.c, name, args,
 		options(s.inside, pulumi.DependsOn(waits))...); err != nil {
 		return fmt.Errorf("%s role %s/%s: %w", s.label, mount, role.Name, err)
 	}
@@ -388,7 +462,7 @@ func (a *applier) role(s *scope, mount string, backend *jwt.AuthBackend, role *m
 // door's mount by the group's name and carrying the same policies. The
 // primary door's identity group and alias keep the bare names.
 func (a *applier) group(
-	s *scope, group *model.Group, accessors map[string]pulumi.StringOutput, policies map[string]*vault.Policy,
+	s *scope, group *model.Group, accessors map[string]func() pulumi.StringOutput, policies map[string]*vault.Policy,
 ) error {
 	var waits []pulumi.Resource
 
@@ -406,9 +480,13 @@ func (a *applier) group(
 			return fmt.Errorf("%s group %s: door %s is no auth mount in this namespace", s.label, group.Name, door)
 		}
 
-		suffix := ""
-		if door != identitySettings.PrimaryDoor {
-			suffix = "-" + door
+		groupName, aliasName, owned, err := a.groupUnit(s, group, door)
+		if err != nil {
+			return err
+		}
+
+		if !owned {
+			continue
 		}
 
 		groupArgs := &identity.GroupArgs{
@@ -422,16 +500,16 @@ func (a *applier) group(
 			groupArgs.Metadata = pulumi.ToStringMap(metadata)
 		}
 
-		created, err := identity.NewGroup(a.c, a.name(s.label+"-group-"+resourceName(group.Name)+suffix), groupArgs,
+		created, err := identity.NewGroup(a.c, groupName, groupArgs,
 			options(s.inside, pulumi.DependsOn(waits))...)
 		if err != nil {
 			return fmt.Errorf("%s group %s: %w", s.label, identitySettings.GroupName(group.Name, door), err)
 		}
 
-		if _, err := identity.NewGroupAlias(a.c, a.name(s.label+"-alias-"+resourceName(group.Name)+suffix), &identity.GroupAliasArgs{
+		if _, err := identity.NewGroupAlias(a.c, aliasName, &identity.GroupAliasArgs{
 			Namespace:     s.arg,
 			Name:          pulumi.String(group.Name),
-			MountAccessor: accessor,
+			MountAccessor: accessor(),
 			CanonicalId:   created.ID().ToStringOutput(),
 		}, s.inside...); err != nil {
 			return fmt.Errorf("%s group alias %s on %s: %w", s.label, group.Name, door, err)

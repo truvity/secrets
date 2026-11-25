@@ -33,7 +33,16 @@ func (a *applier) awsAuthMount(s *scope, desired *model.AWSAuthMount, policies m
 		mountWaits []pulumi.Resource
 	)
 
-	if desired.PluginVersion != "" {
+	// A mount another stack owns gives the roles here its declared path.
+	mountName, clientName, owned, err := a.awsUnit(s, desired)
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case !owned:
+		mountPath = pulumi.String(desired.Path)
+	case desired.PluginVersion != "":
 		endpoint, err := a.awsAuthMountVersioned(s, desired)
 		if err != nil {
 			return err
@@ -47,7 +56,7 @@ func (a *applier) awsAuthMount(s *scope, desired *model.AWSAuthMount, policies m
 		// above only ever fed IN a string built from it).
 		mountPath = pulumi.String(desired.Path)
 		mountWaits = []pulumi.Resource{endpoint}
-	} else {
+	default:
 		args := &vault.AuthBackendArgs{
 			Namespace: s.arg,
 			Path:      pulumi.String(desired.Path),
@@ -58,7 +67,7 @@ func (a *applier) awsAuthMount(s *scope, desired *model.AWSAuthMount, policies m
 			args.Description = pulumi.String(desired.Description)
 		}
 
-		backend, err := vault.NewAuthBackend(a.c, a.name(s.label+"-auth-"+desired.Path), args,
+		backend, err := vault.NewAuthBackend(a.c, mountName, args,
 			a.pluginDependency(s.inside, "auth", awsAuthType)...)
 		if err != nil {
 			return fmt.Errorf("%s aws auth %s: %w", s.label, desired.Path, err)
@@ -68,12 +77,14 @@ func (a *applier) awsAuthMount(s *scope, desired *model.AWSAuthMount, policies m
 		mountWaits = []pulumi.Resource{backend}
 	}
 
-	if _, err := vaultaws.NewAuthBackendClient(a.c, a.name(s.label+"-auth-"+desired.Path+"-client"), &vaultaws.AuthBackendClientArgs{
-		Namespace:              s.arg,
-		Backend:                mountPath,
-		IamServerIdHeaderValue: pulumi.String(desired.IAMServerIDHeaderValue),
-	}, options(s.inside, pulumi.DependsOn(mountWaits))...); err != nil {
-		return fmt.Errorf("%s aws auth %s client: %w", s.label, desired.Path, err)
+	if owned {
+		if _, err := vaultaws.NewAuthBackendClient(a.c, clientName, &vaultaws.AuthBackendClientArgs{
+			Namespace:              s.arg,
+			Backend:                mountPath,
+			IamServerIdHeaderValue: pulumi.String(desired.IAMServerIDHeaderValue),
+		}, options(s.inside, pulumi.DependsOn(mountWaits))...); err != nil {
+			return fmt.Errorf("%s aws auth %s client: %w", s.label, desired.Path, err)
+		}
 	}
 
 	for i := range desired.Roles {
@@ -154,6 +165,11 @@ func (a *applier) awsAuthRole(
 	s *scope, mount string, mountPath pulumi.StringInput, mountWaits []pulumi.Resource,
 	role *model.AWSAuthRole, policies map[string]*vault.Policy,
 ) error {
+	name := a.name(s.label + "-role-" + mount + "-" + role.Name)
+	if !a.owns(TypeAWSAuthBackendRole, name) {
+		return nil
+	}
+
 	ttl, err := model.DurationSeconds(role.TTL)
 	if err != nil {
 		return fmt.Errorf("%s aws role %s/%s: %w", s.label, mount, role.Name, err)
@@ -187,7 +203,7 @@ func (a *applier) awsAuthRole(
 		}
 	}
 
-	if _, err := vaultaws.NewAuthBackendRole(a.c, a.name(s.label+"-role-"+mount+"-"+role.Name), args,
+	if _, err := vaultaws.NewAuthBackendRole(a.c, name, args,
 		options(s.inside, pulumi.DependsOn(waits))...); err != nil {
 		return fmt.Errorf("%s aws role %s/%s: %w", s.label, mount, role.Name, err)
 	}
