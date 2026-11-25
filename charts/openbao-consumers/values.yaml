@@ -322,7 +322,14 @@ approverPolicy:
   # would refuse every request), and so is an entry that names no
   # commonName, dnsNames, uris, ipAddresses or emailAddresses.
   issuers: {}
+  # An entry may carry `selector.namespace` (matchNames and/or matchLabels):
+  # the policy then admits only those namespaces' requests to the issuer, and
+  # another namespace needs a policy of its own (extraPolicies) to be
+  # admitted at all. A ClusterIssuer only.
   #  example-private:
+  #    selector:
+  #      namespace:
+  #        matchNames: [envoy-gateway-system]
   #    dnsNames: ["*.east.example.internal"]
   #    uris: []
   #    commonName: ""          # allowed value; empty: none allowed

@@ -1,0 +1,41 @@
+# An issuer's policy scoped to namespaces (approverPolicy.issuers.<name>.selector):
+# the shared gateway namespace may request every origin name, and each company's
+# namespaces (by label) only their own zone, through an extra policy each.
+# A request from any other namespace matches no policy and is denied.
+server: https://openbao.example.internal:8200
+caBundle: ZXhhbXBsZS1jYQ==
+vaultNamespace: east
+auth:
+  mountPath: jwt-east
+
+pki:
+  enabled: true
+  trustAnchors:
+    - name: example-root-2026
+      certificate: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tClpYaGhiWEJzWlMxeWIyOTAKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+  issuers:
+    - name: example-origin
+      signPath: pki/sign/origin
+      role: example-private
+
+approverPolicy:
+  enabled: true
+  issuers:
+    example-origin:
+      selector:
+        namespace:
+          matchNames: [envoy-gateway-system]
+      dnsNames: ["*.example.com", "example.com", "*.acme.example"]
+      privateKey:
+        minSize: 384
+  extraPolicies:
+    - name: example-origin-acme
+      issuerRef: {group: cert-manager.io, kind: ClusterIssuer, name: example-origin}
+      selector:
+        namespace:
+          matchLabels: {platform.example.io/vendor: acme}
+      allowed:
+        dnsNames: {values: ["*.acme.example"], required: true}
+        isCA: false
+      constraints:
+        privateKey: {minSize: 384}

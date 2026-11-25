@@ -5,6 +5,12 @@ heading here is a patch cut automatically for dependency bumps alone; its
 GitHub Release lists them. Both charts are released at every version, and
 from v0.2.0 on the Go module and `openbaoctl` with them.
 
+## v0.51.0
+
+### Added
+
+- **`openbao-consumers`: `approverPolicy.issuers.<name>.selector.namespace`, an issuer's policy scoped to namespaces.** With `matchNames` and/or `matchLabels`, the issuer's `CertificateRequestPolicy` selects only those namespaces' requests. A request from another namespace is admitted only by a policy of its own, such as an `extraPolicies` entry with its own names. This lets one ClusterIssuer serve several owners, each limited to its own names. A ClusterIssuer only: a selector on a namespaced Issuer is a render error, and so is a selector that names neither `matchNames` nor `matchLabels`. Unset, the policy selects every namespace, as before.
+
 ## v0.50.0
 
 ### Added

@@ -1296,6 +1296,23 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "selector": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["namespace"],
+          "description": "Limits the issuer's policy to the requests of these namespaces (approver-policy spec.selector.namespace). Without it the policy selects every namespace's requests to the issuer. A ClusterIssuer only: a namespaced Issuer's policy is already its own namespace's.",
+          "properties": {
+            "namespace": {
+              "type": "object",
+              "additionalProperties": false,
+              "minProperties": 1,
+              "properties": {
+                "matchNames": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+                "matchLabels": {"$ref": "#/definitions/stringMap"}
+              }
+            }
+          }
+        },
         "commonName": {
           "type": "string"
         },
