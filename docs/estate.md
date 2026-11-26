@@ -59,7 +59,10 @@ and is never applied; the web UI's door and `Names.OperatorKV` are.
 `PKI.Contract` is a `pkg/pki` contract; `PKI.Private`, `PKI.Origin` and
 `PKI.Identity` name its trust domains. Each environment substitutes its
 `PrivateZone` or `OriginZone` for `{zone}`, and the origin role signs
-`Cluster.OriginNames`. Every issuing CA gets a cert-manager login named
+`Cluster.OriginNames`. Any further DNS trust domain takes its `{zone}` from
+the cluster's `Zones`, keyed by the domain's name: a domain that reaches the
+cluster without an entry is refused, and so is an entry that no further
+domain reaching the cluster reads. Every issuing CA gets a cert-manager login named
 after `PKI.ClusterIssuers[domain]`. An environment whose identity CA is not
 `PKI.Signed` yet renders nothing of the identity domain.
 

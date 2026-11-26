@@ -102,8 +102,10 @@ func CatalogKey(domain, role string) string { return domain + "/" + role }
 var allIPRanges = []string{"0.0.0.0/0", "::/0"}
 
 // Derive computes the contract's authorities for the given environments.
-// The contract must already be valid. Every environment gets every DNS
-// trust domain; a URI trust domain reaches only the environments it lists.
+// The contract must already be valid. A trust domain reaches the
+// environments it lists; a DNS trust domain that lists none reaches every
+// environment ([DNSTrustDomain.Reaches]). An environment needs a zone only
+// for the domains that reach it.
 //
 // It refuses what it could not derive whole: a zone the contract needs and
 // the environment does not have, a catalog role with no names, a domain
@@ -142,7 +144,12 @@ func (c *Contract) Derive(environments []Environment) (*Derivation, error) {
 		environment := &environments[i]
 
 		for j := range c.TrustDomains.DNS {
-			authority, err := c.dnsIssuingAuthority(&c.TrustDomains.DNS[j], generation, environment)
+			domain := &c.TrustDomains.DNS[j]
+			if !domain.Reaches(environment.Name) {
+				continue
+			}
+
+			authority, err := c.dnsIssuingAuthority(domain, generation, environment)
 			if err != nil {
 				return nil, err
 			}

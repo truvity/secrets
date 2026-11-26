@@ -88,6 +88,13 @@ type (
 		// which the PKI contract substitutes for {zone}.
 		PrivateZone string `yaml:"privateZone"`
 		OriginZone  string `yaml:"originZone"`
+		// Zones is the zone of every further DNS trust domain that reaches
+		// this cluster, by domain name: each domain other than PKI.Private
+		// and PKI.Origin substitutes its own entry for {zone}, and a domain
+		// that reaches the cluster without one is refused. The private and
+		// origin domains keep PrivateZone and OriginZone and are not named
+		// here.
+		Zones map[string]string `yaml:"zones,omitempty"`
 		// OriginNames are every name the origin role may sign on this
 		// cluster: the edge's hosts, the only bound on that role.
 		OriginNames []string `yaml:"originNames,omitempty"`

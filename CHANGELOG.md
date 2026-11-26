@@ -5,6 +5,14 @@ heading here is a patch cut automatically for dependency bumps alone; its
 GitHub Release lists them. Both charts are released at every version, and
 from v0.2.0 on the Go module and `openbaoctl` with them.
 
+## v0.52.0
+
+### Added
+
+- **`pkg/pki`: a DNS trust domain may list its environments.** `trustDomains.dns[].environments`, set, is which environments get the domain's issuing CA, roles and mount; `Derive` skips the others, which then need no zone for it. `DNSTrustDomain.Reaches(environment)` answers the same for a consumer. The domain intermediate is one either way. Each name is a bare label, listed once. Left out, the domain reaches every environment, as every DNS domain did before: an existing contract derives byte for byte what it did (the derive golden is unchanged).
+
+- **`pkg/estate`: any number of DNS trust domains, each with its own zone.** `Cluster.Zones` is the zone of every DNS trust domain other than `PKI.Private` and `PKI.Origin`, keyed by the domain's name; that domain substitutes it for `{zone}` on the cluster. A further domain that reaches a cluster without an entry is refused, and so is an entry that no further domain reaching the cluster reads (the private and origin domains keep `PrivateZone` and `OriginZone`). Adoption: declare the domain in the contract, give it a `PKI.ClusterIssuers` entry, and give each cluster it reaches its zone. Unset, `Build` derives what it did (the estate goldens are unchanged). [ADR 0006](docs/decisions/0006-dns-trust-domains-per-environment.md).
+
 ## v0.51.0
 
 ### Added
