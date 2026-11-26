@@ -281,3 +281,33 @@ func TestSelectionChecksUseTheChildsResourceNames(t *testing.T) {
 	// Refused by the check before anything is registered, not halfway.
 	assert.Empty(t, m.sorted(), "nothing is registered, the provider included")
 }
+
+// The intermediate's run -- logged in at the party's namespace, selecting
+// the party's PKI contents -- (re)issues a child's issuing CA end to end in
+// one Apply: the request in the child, the signature at the intermediate in
+// the party's namespace, the import back in the child, each chained to the
+// one before; with the child named relative to the login.
+func TestTheIntermediatesRunSignsAChildCAInOneApply(t *testing.T) {
+	party, _, err := deploy(t, withVendor(t), vendorOptions(apply.SelectVendor(vendor), vendor), false)
+	require.NoError(t, err)
+
+	csr, ok := party.named("vendor-a-dev-csr")
+	require.True(t, ok, "the child's request")
+	assert.Equal(t, "dev", csr.Inputs["namespace"])
+
+	signed, ok := party.named("vendor-a-dev-signed")
+	require.True(t, ok, "the signature at the intermediate")
+	assert.NotContains(t, signed.Inputs, "namespace", "signed in the party's own namespace, the login's")
+	assert.Equal(t, "pki-vendor-a-private", signed.Inputs["backend"])
+	assert.Equal(t, "vendor-a-int", signed.Inputs["issuerRef"])
+	assert.Equal(t, "vendor-a-dev-csr#csr", signed.Inputs["csr"], "the signature takes the child's request")
+
+	imported, ok := party.named("vendor-a-dev-import")
+	require.True(t, ok, "the import in the child")
+	assert.Equal(t, "dev", imported.Inputs["namespace"])
+	assert.Contains(t, imported.Inputs["certificate"], "vendor-a-dev-signed#", "the import takes the signature")
+
+	for _, r := range party.sorted() {
+		assert.NotContains(t, []string{apply.TypeNamespace, apply.TypeMount, apply.TypeJWTAuthBackend}, r.Type, r.Name)
+	}
+}

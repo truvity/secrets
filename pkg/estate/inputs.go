@@ -414,7 +414,11 @@ type VendorDoors struct {
 	// roster's token.
 	TTL string `yaml:"ttl"`
 	// IntermediateEnvironment is whose audience and groups the door in
-	// `<vendor>` itself admits, to the party's intermediate mount alone.
+	// `<vendor>` itself admits: the one door that reaches the party's
+	// intermediate mount and every child's PKI mounts, to (re)issue the
+	// party's issuing CAs in one run. The intended value is the estate's
+	// production environment, for every party: whoever may change
+	// production may change the environments below it.
 	IntermediateEnvironment string `yaml:"intermediateEnvironment"`
 }
 

@@ -124,8 +124,15 @@ func TestAVendorNamespacesDoors(t *testing.T) {
 		require.Len(t, namespace.PKI, 1)
 		mount := namespace.PKI[0].Path
 
+		// The intermediate's door also reaches its child's issuing mount.
+		reach := []string{mount + "/"}
+		if name == "vendor-a" {
+			reach = append(reach, "alpha/"+modelNamespace(t, m, "vendor-a/alpha").PKI[0].Path+"/")
+		}
+
 		for _, rule := range policy.Rules {
-			assert.True(t, strings.HasPrefix(rule.Path, mount+"/"), "%s's door names %s, outside its own PKI mount", name, rule.Path)
+			assert.True(t, slices.ContainsFunc(reach, func(p string) bool { return strings.HasPrefix(rule.Path, p) }),
+				"%s's door names %s, outside the mounts it may reach", name, rule.Path)
 
 			for _, forbidden := range []string{"/issue/", "/sign/", "exported", "/root/generate", "/keys/generate", "/keys/import"} {
 				assert.NotContains(t, rule.Path, forbidden, "%s's door names %s", name, rule.Path)
@@ -179,11 +186,37 @@ func TestAnEnvironmentsDoorCannotReachAnother(t *testing.T) {
 		}
 	}
 
-	// The intermediate's door names the intermediate mount and no child.
-	for _, policy := range party.Policies {
-		for _, rule := range policy.Rules {
-			assert.False(t, strings.HasPrefix(rule.Path, "alpha/") || strings.HasPrefix(rule.Path, "beta/"),
-				"the intermediate's door names %s", rule.Path)
+	// alpha's door lives in vendor-a/alpha and names only alpha's own
+	// mounts (above): a policy there cannot reach its parent, where the
+	// intermediate is, nor a sibling, whatever the mounts are called.
+
+	// The intermediate's door reaches every child's issuing mount, the
+	// request, the import and the configuration there, and nothing outside
+	// the party's namespace; only its own mount signs.
+	intermediate := party.Policies[slices.IndexFunc(party.Policies, func(p model.Policy) bool { return p.Name == "pki-admin" })]
+	paths := map[string]bool{}
+
+	for _, rule := range intermediate.Rules {
+		paths[rule.Path] = true
+
+		inside := strings.HasPrefix(rule.Path, party.PKI[0].Path+"/") ||
+			strings.HasPrefix(rule.Path, "alpha/"+alpha.PKI[0].Path+"/") ||
+			strings.HasPrefix(rule.Path, "beta/"+beta.PKI[0].Path+"/")
+		assert.True(t, inside, "the intermediate's door names %s", rule.Path)
+
+		for _, forbidden := range []string{"sys/", "../", "/issue/", "/sign/", "exported"} {
+			assert.NotContains(t, rule.Path, forbidden, "the intermediate's door names %s", rule.Path)
+		}
+
+		if strings.HasSuffix(rule.Path, "/root/sign-intermediate") {
+			assert.Equal(t, party.PKI[0].Path+"/root/sign-intermediate", rule.Path, "only the intermediate signs")
+		}
+	}
+
+	for _, child := range []*model.Namespace{alpha, beta} {
+		_, env, _ := strings.Cut(child.Name, "/")
+		for _, endpoint := range []string{"/intermediate/generate/internal", "/intermediate/set-signed", "/config/*", "/roles/*"} {
+			assert.True(t, paths[env+"/"+child.PKI[0].Path+endpoint], "the intermediate's door lacks %s/%s%s", env, child.PKI[0].Path, endpoint)
 		}
 	}
 

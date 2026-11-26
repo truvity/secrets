@@ -87,10 +87,13 @@ func (d *Desired) vendorNamespaces() ([]model.Namespace, error) {
 
 // vendorDoors gives each party namespace its own login (PKI.VendorDoors):
 // in `<vendor>/<env>` a door admitting that environment's groups to that
-// environment's PKI mounts, and in `<vendor>` a door admitting the
-// intermediate's environment's groups to the intermediate mount. A door's
-// policy names the PKI mounts of its own namespace and nothing else --
-// nothing of `sys/`, nothing of another environment.
+// environment's PKI mounts alone, for day-to-day work; and in `<vendor>` a
+// door admitting the intermediate's environment's groups (production) to
+// the intermediate's mount AND every child's PKI mounts, for the one run
+// that (re)issues the party's issuing CAs: the request in the child, the
+// signature at the intermediate, the import in the child. No door names
+// anything of `sys/`, and an environment's door nothing of another
+// environment or of the intermediate.
 func (d *Desired) vendorDoors(out *model.Desired) error {
 	doors := d.in.PKI.VendorDoors
 	if doors == nil {
@@ -121,7 +124,23 @@ func (d *Desired) vendorDoors(out *model.Desired) error {
 
 		var rules []model.Rule
 		for j := range namespace.PKI {
-			rules = append(rules, doorRules(namespace.PKI[j].Path, !nested)...)
+			rules = append(rules, doorRules("", namespace.PKI[j].Path, !nested)...)
+		}
+
+		// The intermediate's door reaches its children's PKI mounts too.
+		if !nested {
+			for k := range out.Vendors {
+				child := &out.Vendors[k]
+
+				prefix, ok := strings.CutPrefix(child.Name, namespace.Name+"/")
+				if !ok {
+					continue
+				}
+
+				for j := range child.PKI {
+					rules = append(rules, doorRules(prefix+"/", child.PKI[j].Path, false)...)
+				}
+			}
 		}
 
 		groups := make([]string, 0, len(doors.Groups))
@@ -156,7 +175,12 @@ func (d *Desired) vendorDoors(out *model.Desired) error {
 // mount, and manage the roles; on the intermediate's mount also sign the
 // party's issuing CAs. Never issue or sign a leaf (cert-manager has its own
 // login for that), never generate or import an exportable key.
-func doorRules(mount string, intermediate bool) []model.Rule {
+//
+// prefix is the child namespace the mount is in, relative to the policy's
+// own ("" for its own namespace).
+func doorRules(prefix, mount string, intermediate bool) []model.Rule {
+	mount = prefix + mount
+
 	write := []string{model.CapCreate, model.CapUpdate}
 	read := []string{model.CapRead, model.CapList}
 	manage := []string{model.CapCreate, model.CapRead, model.CapUpdate, model.CapDelete, model.CapList}
