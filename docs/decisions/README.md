@@ -28,7 +28,7 @@ reasoning for the decisions they cover.
 | [0003](0003-ssh-people-external-machines-and-hosts-on-our-cas.md) | SSH: people on an external OIDC flow, machines and hosts on this installation's own CAs |
 | [0004](0004-jwt-oidc-mounts-state-supported-signing-algorithms.md) | Every JWT/OIDC mount states its supported signing algorithms |
 | [0005](0005-one-model-several-stacks.md) | One model may be applied as several stacks (`Options.Select`) |
-| [0006](0006-dns-trust-domains-per-environment.md) | Any number of DNS trust domains, each reaching its own environments (`environments`, `Cluster.Zones`) |
+| [0006](0006-dns-trust-domains-per-environment.md) | Any number of DNS trust domains, each reaching its own environments, and pending domain intermediates (`environments`, `Cluster.Zones`, `PendingDomains`) |
 
 ## Template
 

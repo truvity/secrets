@@ -255,8 +255,10 @@ type (
 		// Environments, set, is which environments get an issuing CA and
 		// the roles under this domain; the others get nothing of it. Left
 		// out, every environment does, which is what a domain authored
-		// before the list existed keeps deriving. The domain intermediate
-		// is one either way: it lives in the root namespace.
+		// before the list existed keeps deriving. Stated, it names at least
+		// one environment: an empty list is refused rather than read as
+		// either. The domain intermediate is one either way: it lives in the
+		// root namespace.
 		Environments       []string           `yaml:"environments,omitempty"`
 		DomainIntermediate DomainIntermediate `yaml:"domainIntermediate"`
 		Lifetimes          Lifetimes          `yaml:"lifetimes"`
@@ -752,8 +754,13 @@ func (c *Contract) DNSTrustDomain(name string) *DNSTrustDomain {
 }
 
 // Reaches reports whether environment gets an issuing CA in this domain:
-// it is listed in Environments, or the list is left out.
+// it is listed in Environments, or the list is left out. A nil domain (one
+// [Contract.DNSTrustDomain] did not find) reaches nothing.
 func (d *DNSTrustDomain) Reaches(environment string) bool {
+	if d == nil {
+		return false
+	}
+
 	return len(d.Environments) == 0 || slices.Contains(d.Environments, environment)
 }
 

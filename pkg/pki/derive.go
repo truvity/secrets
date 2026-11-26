@@ -86,11 +86,53 @@ type (
 	Derivation struct {
 		// Domains are the root namespace's authorities: the domain
 		// intermediates. A trust domain with no shared intermediate has
-		// none.
+		// none, and neither has a pending one.
 		Domains []Authority
 		// Issuing are the environments' issuing CAs, environment by
 		// environment in the order the environments were given.
 		Issuing []Authority
+		// Pending are the DNS domain intermediates the root has not signed
+		// yet ([DeriveOptions.PendingDomains]), in authored order.
+		Pending []PendingIntermediate
+	}
+
+	// DeriveOptions is what [Contract.DeriveWith] takes beside the
+	// environments.
+	DeriveOptions struct {
+		// PendingDomains names the DNS trust domains whose intermediate the
+		// root has not signed yet: its ceremony artifact is not committed.
+		// Such a domain derives no authority and nothing in any environment,
+		// so no environment needs its zone; it derives only a
+		// [PendingIntermediate], what the key and request the root signs
+		// are made from. Leave a domain out once its artifact is committed:
+		// it then derives in full, under the same names.
+		PendingDomains []string
+	}
+
+	// PendingIntermediate is a DNS domain intermediate the root has not
+	// signed yet: phase A of its ceremony, a mount of its own in the root
+	// namespace and a key there whose certificate request the root signs.
+	// Its mount and key carry exactly the path, name and settings the signed
+	// domain derives, so the signed apply adopts them in place
+	// ([github.com/truvity/secrets/pkg/apply]'s BootstrapEnvironmentCA
+	// registers them under the names Deploy later gives the same objects).
+	PendingIntermediate struct {
+		// Domain is the trust domain's name.
+		Domain string
+		// Mount is the domain mount's path in the root namespace, and
+		// MountDescription its description.
+		Mount            string
+		MountDescription string
+		// LeaseTTL is the mount's default and maximum lease: the domain
+		// intermediate's lifetime, as [Derivation.RootMounts] gives it once
+		// signed.
+		LeaseTTL string
+		// KeyName is the key's name in the mount: the intermediate's issuer
+		// name.
+		KeyName      string
+		CommonName   string
+		Organization string
+		KeyCurve     string
 	}
 )
 
@@ -101,19 +143,33 @@ func CatalogKey(domain, role string) string { return domain + "/" + role }
 // contract signs has one.
 var allIPRanges = []string{"0.0.0.0/0", "::/0"}
 
-// Derive computes the contract's authorities for the given environments.
-// The contract must already be valid. A trust domain reaches the
-// environments it lists; a DNS trust domain that lists none reaches every
-// environment ([DNSTrustDomain.Reaches]). An environment needs a zone only
-// for the domains that reach it.
+// Derive computes the contract's authorities for the given environments,
+// every domain signed: [Contract.DeriveWith] with no options.
+func (c *Contract) Derive(environments []Environment) (*Derivation, error) {
+	return c.DeriveWith(environments, DeriveOptions{})
+}
+
+// DeriveWith computes the contract's authorities for the given
+// environments. The contract must already be valid. A trust domain reaches
+// the environments it lists; a DNS trust domain that lists none reaches
+// every environment ([DNSTrustDomain.Reaches]). An environment needs a zone
+// only for the domains that reach it, and a pending domain
+// ([DeriveOptions.PendingDomains]) reaches none.
 //
 // It refuses what it could not derive whole: a zone the contract needs and
-// the environment does not have, a catalog role with no names, a domain
-// below a generation that is not the active one.
-func (c *Contract) Derive(environments []Environment) (*Derivation, error) {
+// the environment does not have, a zone outside its own domain, two
+// environments whose zones nest in a name-constrained domain, a catalog role
+// with no names, a domain below a generation that is not the active one, and
+// a pending domain that is no DNS domain or shares its domain mount.
+func (c *Contract) DeriveWith(environments []Environment, options DeriveOptions) (*Derivation, error) {
 	generation := c.activeGeneration()
 	if generation == nil {
 		return nil, fmt.Errorf("pki: the contract declares no active root generation")
+	}
+
+	pending, err := c.pendingDomains(options.PendingDomains)
+	if err != nil {
+		return nil, err
 	}
 
 	derivation := &Derivation{}
@@ -125,7 +181,24 @@ func (c *Contract) Derive(environments []Environment) (*Derivation, error) {
 				domain.Name, domain.RootGeneration, generation.ID)
 		}
 
-		derivation.Domains = append(derivation.Domains, c.dnsDomainAuthority(domain, generation))
+		authority := c.dnsDomainAuthority(domain, generation)
+
+		if pending[domain.Name] {
+			derivation.Pending = append(derivation.Pending, PendingIntermediate{
+				Domain:           domain.Name,
+				Mount:            authority.Mount,
+				MountDescription: authority.mountDescription,
+				LeaseTTL:         authority.TTL,
+				KeyName:          authority.Issuer,
+				CommonName:       authority.CommonName,
+				Organization:     authority.Organization,
+				KeyCurve:         authority.KeyCurve,
+			})
+
+			continue
+		}
+
+		derivation.Domains = append(derivation.Domains, authority)
 	}
 
 	for i := range c.TrustDomains.URI {
@@ -140,12 +213,16 @@ func (c *Contract) Derive(environments []Environment) (*Derivation, error) {
 		}
 	}
 
+	// zones holds, per DNS domain, the zone of each environment it
+	// reaches, for the check across environments below.
+	zones := map[string][]environmentZone{}
+
 	for i := range environments {
 		environment := &environments[i]
 
 		for j := range c.TrustDomains.DNS {
 			domain := &c.TrustDomains.DNS[j]
-			if !domain.Reaches(environment.Name) {
+			if pending[domain.Name] || !domain.Reaches(environment.Name) {
 				continue
 			}
 
@@ -155,6 +232,7 @@ func (c *Contract) Derive(environments []Environment) (*Derivation, error) {
 			}
 
 			derivation.Issuing = append(derivation.Issuing, authority)
+			zones[domain.Name] = append(zones[domain.Name], environmentZone{environment.Name, strings.TrimSpace(environment.Zones[domain.Name])})
 		}
 
 		for j := range c.TrustDomains.URI {
@@ -172,7 +250,106 @@ func (c *Contract) Derive(environments []Environment) (*Derivation, error) {
 		}
 	}
 
+	for i := range c.TrustDomains.DNS {
+		if err := zonesApart(&c.TrustDomains.DNS[i], zones[c.TrustDomains.DNS[i].Name]); err != nil {
+			return nil, err
+		}
+	}
+
 	return derivation, nil
+}
+
+// environmentZone is one environment's zone in one DNS domain.
+type environmentZone struct{ environment, zone string }
+
+// pendingDomains checks DeriveOptions.PendingDomains and returns it as a
+// set: each a DNS trust domain, named once, with a domain mount no other
+// domain shares. A shared mount is refused because its default issuer, its
+// URLs and its CRL belong to whichever domain is authored first, and
+// signing a pending one would move them.
+func (c *Contract) pendingDomains(names []string) (map[string]bool, error) {
+	pending := make(map[string]bool, len(names))
+
+	for _, name := range names {
+		domain := c.DNSTrustDomain(name)
+		if domain == nil {
+			return nil, fmt.Errorf("pki: pending domain %q is no dns trust domain of the contract", name)
+		}
+
+		if pending[name] {
+			return nil, fmt.Errorf("pki: pending domain %q is named twice", name)
+		}
+
+		pending[name] = true
+
+		for i := range c.TrustDomains.DNS {
+			other := &c.TrustDomains.DNS[i]
+			if other.Name != name && other.DomainMountPath() == domain.DomainMountPath() {
+				return nil, fmt.Errorf("pki: pending domain %s shares its domain mount %s with %s: a pending domain needs a mount of its own",
+					name, domain.DomainMountPath(), other.Name)
+			}
+		}
+
+		for i := range c.TrustDomains.URI {
+			other := &c.TrustDomains.URI[i]
+			if other.hasSharedIntermediate() && other.DomainMountPath() == domain.DomainMountPath() {
+				return nil, fmt.Errorf("pki: pending domain %s shares its domain mount %s with %s: a pending domain needs a mount of its own",
+					name, domain.DomainMountPath(), other.Name)
+			}
+		}
+	}
+
+	return pending, nil
+}
+
+// checkZone refuses a zone that is not a lower-case DNS name, is not the
+// domain's suffix or under it, or falls outside the domain intermediate's
+// name constraint: an issuing CA constrained to such a zone could sign
+// nothing its domain may, or something it may not.
+func checkZone(domain *DNSTrustDomain, environment, zone string) error {
+	if !isDNSName(zone) {
+		return fmt.Errorf("pki: environment %s: zone %q of trust domain %s is not a lower-case DNS name", environment, zone, domain.Name)
+	}
+
+	if !strings.EqualFold(zone, domain.Suffix) && !isNameUnderDomain(zone, domain.Suffix) {
+		return fmt.Errorf("pki: environment %s: zone %q of trust domain %s is not %s or under it", environment, zone, domain.Name, domain.Suffix)
+	}
+
+	if permitted := domain.DomainIntermediate.PermittedDNSDomains; len(permitted) != 0 && !nameIsPermitted(zone, permitted) {
+		return fmt.Errorf("pki: environment %s: zone %q of trust domain %s is outside its name constraint %v", environment, zone, domain.Name, permitted)
+	}
+
+	return nil
+}
+
+// zonesApart refuses, in a name-constrained domain, environments whose
+// issuing CAs would overlap: a zone equal to the suffix (that CA could sign
+// every other environment's names), two environments with one zone, or one
+// zone under another. An unconstrained domain has no such boundary to keep.
+func zonesApart(domain *DNSTrustDomain, zones []environmentZone) error {
+	if len(domain.DomainIntermediate.PermittedDNSDomains) == 0 {
+		return nil
+	}
+
+	for _, a := range zones {
+		if strings.EqualFold(a.zone, domain.Suffix) {
+			return fmt.Errorf("pki: environment %s: zone %q of trust domain %s is the domain's whole suffix; "+
+				"in a name-constrained domain each environment's zone is below it", a.environment, a.zone, domain.Name)
+		}
+	}
+
+	for i, a := range zones {
+		for _, b := range zones[i+1:] {
+			switch {
+			case strings.EqualFold(a.zone, b.zone):
+				return fmt.Errorf("pki: environments %s and %s share zone %q in trust domain %s", a.environment, b.environment, a.zone, domain.Name)
+			case isNameUnderDomain(a.zone, b.zone), isNameUnderDomain(b.zone, a.zone):
+				return fmt.Errorf("pki: the zones %q (%s) and %q (%s) of trust domain %s nest", a.zone, a.environment, b.zone, b.environment, domain.Name)
+			}
+		}
+	}
+
+	return nil
 }
 
 func (c *Contract) activeGeneration() *RootGeneration {
@@ -313,6 +490,10 @@ func zoneOf(environment *Environment, domain string) (string, error) {
 func (c *Contract) dnsIssuingAuthority(domain *DNSTrustDomain, generation *RootGeneration, environment *Environment) (Authority, error) {
 	zone, err := zoneOf(environment, domain.Name)
 	if err != nil {
+		return Authority{}, err
+	}
+
+	if err := checkZone(domain, environment.Name, zone); err != nil {
 		return Authority{}, err
 	}
 

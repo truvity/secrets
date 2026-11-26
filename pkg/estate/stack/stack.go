@@ -65,7 +65,9 @@ type (
 //
 // An identity environment CA that is not signed yet is bootstrapped beside
 // the apply: its mount and the request of the key the server generates,
-// under the name the apply adopts once it is signed.
+// under the name the apply adopts once it is signed. A pending domain
+// intermediate (estate.PKI.PendingDomains) is bootstrapped the same way, in
+// root, and its request is exported under the domain's request output.
 func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 	state, err := desired.Model()
 	if err != nil {
@@ -93,6 +95,25 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 
 			bootstraps[environment] = owned
 		}
+	}
+
+	// Which pending domain intermediates this stack bootstraps, decided the
+	// same way, before anything is registered.
+	pendingDomains := map[string]bool{}
+
+	for i := range desired.PKI.Pending {
+		pending := &desired.PKI.Pending[i]
+
+		if _, ok := opts.DomainCSROutputs[pending.TrustDomain]; !ok {
+			return fmt.Errorf("stack: trust domain %s has no request output", pending.TrustDomain)
+		}
+
+		owned, err := selectsBootstrap(opts.Select, rename, "", pending.Mount, pending.KeyName)
+		if err != nil {
+			return err
+		}
+
+		pendingDomains[pending.TrustDomain] = owned
 	}
 
 	result, err := apply.Deploy(c, state, apply.Options{
@@ -127,6 +148,30 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 		}
 
 		c.Export(output, csr)
+	}
+
+	for i := range desired.PKI.Pending {
+		pending := &desired.PKI.Pending[i]
+		if !pendingDomains[pending.TrustDomain] {
+			continue
+		}
+
+		csr, err := apply.BootstrapEnvironmentCA(c, result.Provider, apply.BootstrapEnvironmentCAOptions{
+			Mount:            pending.Mount,
+			DefaultLeaseTTL:  pending.LeaseTTL,
+			MaxLeaseTTL:      pending.LeaseTTL,
+			MountDescription: pending.MountDescription,
+			KeyName:          pending.KeyName,
+			CommonName:       pending.CommonName,
+			Organization:     pending.Organization,
+			KeyCurve:         pending.KeyCurve,
+			Rename:           rename,
+		})
+		if err != nil {
+			return err
+		}
+
+		c.Export(opts.DomainCSROutputs[pending.TrustDomain], csr)
 	}
 
 	if identity == nil || len(identity.Environments) == 0 {
@@ -185,15 +230,23 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 	return nil
 }
 
-// selectsBootstrap reports whether this stack bootstraps an identity
-// environment CA: always without a selector; otherwise when it selects the
-// CA's mount, and then its request too (the two are one unit).
-func selectsBootstrap(selects func(apply.Resource) bool, rename func(string) string, environment, mount, keyName string) (bool, error) {
+// selectsBootstrap reports whether this stack bootstraps an unsigned CA --
+// an identity environment CA in its environment's namespace, or a pending
+// domain intermediate in root (namespace "") -- always without a selector;
+// otherwise when it selects the CA's mount, and then its request too (the
+// two are one unit). The names are the ones apply.Deploy gives the same
+// objects once the CA is signed.
+func selectsBootstrap(selects func(apply.Resource) bool, rename func(string) string, namespace, mount, keyName string) (bool, error) {
 	if selects == nil {
 		return true, nil
 	}
 
-	mountResource := apply.Resource{Type: apply.TypeMount, Name: rename(environment + "-" + mount)}
+	mountName := mount
+	if namespace != "" {
+		mountName = namespace + "-" + mount
+	}
+
+	mountResource := apply.Resource{Type: apply.TypeMount, Name: rename(mountName)}
 	csrResource := apply.Resource{Type: apply.TypePKIIntermediateCertRequest, Name: rename(keyName + "-csr")}
 
 	owned := selects(mountResource)

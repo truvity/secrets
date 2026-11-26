@@ -3,6 +3,7 @@
 package example
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -116,5 +117,62 @@ func Inputs(t testing.TB, contractPath string) estate.Inputs {
 			Environment: "beta", Name: "edge", Domain: "edge.example.net", InstanceRoleARN: "arn:aws:iam::111122223333:role/beta-edge",
 			AuthRole: "edge-host", SigningRole: "edge", Policy: "edge-sign", ServerID: "bao.beta.example.org",
 		}},
+	}
+}
+
+// VendorDomain is the further DNS trust domain [WithVendorDomain] adds.
+const VendorDomain = "vendor-a"
+
+// WithVendorDomain adds to in a further DNS trust domain, vendor-a.example,
+// shaped like the private one and reaching the given clusters (every
+// cluster when none is given), with its own mount, intermediate and
+// cluster issuer, and each listed cluster's zone for it.
+func WithVendorDomain(t testing.TB, in *estate.Inputs, clusters ...string) {
+	t.Helper()
+
+	contract := in.PKI.Contract
+
+	private := contract.DNSTrustDomain(in.PKI.Private)
+	if private == nil {
+		t.Fatal("the example contract has no private domain")
+	}
+
+	role := private.Roles[0]
+	role.Name = VendorDomain
+
+	contract.TrustDomains.DNS = append(contract.TrustDomains.DNS, pki.DNSTrustDomain{
+		Name:           VendorDomain,
+		Suffix:         "vendor-a.example",
+		RootGeneration: private.RootGeneration,
+		Environments:   clusters,
+		DomainIntermediate: pki.DomainIntermediate{
+			Name: "example-vendor-a-2026-09",
+			Subject: pki.Subject{
+				CommonName:   "vendor-a.example Intermediate CA",
+				Organization: private.DomainIntermediate.Subject.Organization,
+			},
+			KeyCurve:            private.DomainIntermediate.KeyCurve,
+			MaxPathLen:          private.DomainIntermediate.MaxPathLen,
+			PermittedDNSDomains: []string{"vendor-a.example"},
+		},
+		Lifetimes: private.Lifetimes,
+		Placement: pki.Placement{IssuingMount: "pki-vendor-a"},
+		IssuingCA: private.IssuingCA,
+		Roles:     []pki.LeafRole{role},
+	})
+
+	if err := contract.Validate(); err != nil {
+		t.Fatalf("the contract with a further domain does not validate: %v", err)
+	}
+
+	in.PKI.ClusterIssuers[VendorDomain] = "vendor-a-ca"
+
+	for i := range in.Clusters {
+		cluster := &in.Clusters[i]
+		if len(clusters) != 0 && !slices.Contains(clusters, cluster.Name) {
+			continue
+		}
+
+		cluster.Zones = map[string]string{VendorDomain: cluster.Name + ".vendor-a.example"}
 	}
 }

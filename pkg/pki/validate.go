@@ -53,6 +53,10 @@ func (c *Contract) Validate() error {
 		}
 	}
 
+	if err := c.TrustDomains.dnsApart(); err != nil {
+		return err
+	}
+
 	for i := range c.TrustDomains.URI {
 		domain := &c.TrustDomains.URI[i]
 		if err := domain.validate(c.Global, generationLifetimes); err != nil {
@@ -327,13 +331,47 @@ func (d *DNSTrustDomain) validate(global Global, generations map[string]generati
 		return err
 	}
 
-	// Left out, the list means every environment; stated, it names each
-	// once. A stated empty list is the same as leaving it out.
+	// Left out, the list means every environment; stated, it names at
+	// least one, each once. A stated empty list is refused: it would read
+	// as "every environment", the opposite of what it says.
+	if d.Environments != nil && len(d.Environments) == 0 {
+		return fmt.Errorf("pki: %s.environments is empty: leave it out to reach every environment, or name at least one", path)
+	}
+
 	if _, err := validateEnvironments(path, d.Environments); err != nil {
 		return err
 	}
 
 	return validateCredentialRoles(path+".credentialRoles", d.CredentialRoles, d.Roles, global, leafDefault, leafMaximum)
+}
+
+// dnsApart refuses two DNS trust domains whose names overlap: a suffix, or
+// a name-constraint entry, of one equal to or under a suffix or entry of the
+// other. Each domain's chain then signs only under its own names, and no
+// name is under two domains' roles at once.
+func (t TrustDomains) dnsApart() error {
+	names := func(d *DNSTrustDomain) []string {
+		return append([]string{d.Suffix}, d.DomainIntermediate.PermittedDNSDomains...)
+	}
+
+	for i := range t.DNS {
+		a := &t.DNS[i]
+
+		for j := i + 1; j < len(t.DNS); j++ {
+			b := &t.DNS[j]
+
+			for _, x := range names(a) {
+				for _, y := range names(b) {
+					if strings.EqualFold(x, y) || isNameUnderDomain(x, y) || isNameUnderDomain(y, x) {
+						return fmt.Errorf("pki: trust domains %s and %s overlap: %q and %q; each dns domain's suffix and name constraint stay apart from every other's",
+							a.Name, b.Name, x, y)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // validateEnvironments checks a trust domain's environments list: bare
