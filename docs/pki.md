@@ -172,6 +172,13 @@ role's `names.source` is one of:
   declared list, so nothing can ask for a wildcard the catalog does not
   already name, which an authored pattern can never guarantee.
 
+A DNS domain reaches every environment unless it lists them in
+`environments`. A contract may declare any number of DNS domains, each with
+its own suffix, intermediate and mounts: a domain for one vendor's names,
+say, that reaches only the environments that vendor runs in, its
+intermediate constrained to its own suffix so its chain can sign nothing
+under another's.
+
 **`trustDomains.uri`** is a workload-identity shape (a URI name constraint
 instead of a DNS one): no DNS suffix, no per-role name patterns, one role
 signing a URI SAN alone, and an **explicit per-environment allow-list**
@@ -465,9 +472,13 @@ answer is refused -- a role that could sign nothing), and the URI domains
 whose root-signed CA for that environment is not committed yet
 (`Environment.PendingCAs`; nothing is derived for one, and its mount and
 key come from `apply.BootstrapEnvironmentCA` until the artifact exists).
-Every environment gets every DNS domain; a URI domain reaches only the
-environments it lists. It refuses a domain declared below a generation that
-is not the active one.
+A trust domain reaches the environments it lists: a URI domain lists them
+always, a DNS domain optionally (`environments`), and a DNS domain that lists
+none reaches every environment, as every DNS domain did before the list
+existed. An environment needs a zone only for the domains that reach it, and
+one a domain does not reach gets no issuing CA, roles or mount of it; the
+domain intermediate is one either way, in the root namespace. It refuses a
+domain declared below a generation that is not the active one.
 
 The result is a `Derivation`: `Domains` (the domain intermediates, `external`
 issuers whose committed artifact is at `ArtifactPath`) and `Issuing` (each

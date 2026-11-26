@@ -247,6 +247,10 @@ func pkiEnvironment(in *PKI, cluster *Cluster) (pki.Environment, error) {
 		},
 	}
 
+	if err := furtherZones(in, cluster, environment.Zones); err != nil {
+		return pki.Environment{}, err
+	}
+
 	// Until an environment's own identity CA is signed it renders NOTHING of
 	// the identity domain: the bootstrap creates its mount and key alone.
 	if !in.Signed[cluster.Name] {
@@ -254,6 +258,45 @@ func pkiEnvironment(in *PKI, cluster *Cluster) (pki.Environment, error) {
 	}
 
 	return environment, nil
+}
+
+// furtherZones adds to zones the zone of every DNS trust domain other than
+// the private and origin ones that reaches the cluster, from
+// Cluster.Zones. It refuses a domain that reaches the cluster with no zone,
+// and an entry of Cluster.Zones that feeds no such domain: a zone nothing
+// reads is a mistake in the inputs, not a default.
+func furtherZones(in *PKI, cluster *Cluster, zones map[string]string) error {
+	fed := map[string]bool{}
+
+	for i := range in.Contract.TrustDomains.DNS {
+		domain := &in.Contract.TrustDomains.DNS[i]
+		if domain.Name == in.Private || domain.Name == in.Origin || !domain.Reaches(cluster.Name) {
+			continue
+		}
+
+		zone, err := zoneOf(in, cluster, domain.Name)
+		if err != nil {
+			return err
+		}
+
+		zones[domain.Name] = zone
+		fed[domain.Name] = true
+	}
+
+	names := make([]string, 0, len(cluster.Zones))
+	for name := range cluster.Zones {
+		names = append(names, name)
+	}
+
+	slices.Sort(names)
+
+	for _, name := range names {
+		if !fed[name] {
+			return fmt.Errorf("estate: cluster %s has a zone for %q, which is not a further dns trust domain that reaches it", cluster.Name, name)
+		}
+	}
+
+	return nil
 }
 
 // configureIssuingCA records one derived issuing CA in its namespace's view,
@@ -338,11 +381,18 @@ func ActiveGeneration(contract *pki.Contract) (*pki.RootGeneration, error) {
 }
 
 // zoneOf is the zone a trust domain substitutes for {zone} on one cluster:
-// the origin zone for the origin domain, the private zone for the others.
+// the private zone for the private domain, the origin zone for the origin
+// domain, and the cluster's own entry in Zones for any other.
 func zoneOf(in *PKI, cluster *Cluster, trustDomain string) (string, error) {
-	zone := cluster.PrivateZone
-	if trustDomain == in.Origin {
+	var zone string
+
+	switch trustDomain {
+	case in.Private:
+		zone = cluster.PrivateZone
+	case in.Origin:
 		zone = cluster.OriginZone
+	default:
+		zone = cluster.Zones[trustDomain]
 	}
 
 	if strings.TrimSpace(zone) == "" {

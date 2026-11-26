@@ -251,7 +251,13 @@ type (
 		// mount that signs it looks perfectly healthy. A domain trusted
 		// only by workloads that already hold the chain some other way
 		// (mTLS between this estate's own services) leaves this false.
-		RequireTrusted     bool               `yaml:"requireTrusted,omitempty"`
+		RequireTrusted bool `yaml:"requireTrusted,omitempty"`
+		// Environments, set, is which environments get an issuing CA and
+		// the roles under this domain; the others get nothing of it. Left
+		// out, every environment does, which is what a domain authored
+		// before the list existed keeps deriving. The domain intermediate
+		// is one either way: it lives in the root namespace.
+		Environments       []string           `yaml:"environments,omitempty"`
 		DomainIntermediate DomainIntermediate `yaml:"domainIntermediate"`
 		Lifetimes          Lifetimes          `yaml:"lifetimes"`
 		// Placement is where OpenBAO keeps the domain's authorities.
@@ -743,6 +749,12 @@ func (c *Contract) DNSTrustDomain(name string) *DNSTrustDomain {
 	}
 
 	return nil
+}
+
+// Reaches reports whether environment gets an issuing CA in this domain:
+// it is listed in Environments, or the list is left out.
+func (d *DNSTrustDomain) Reaches(environment string) bool {
+	return len(d.Environments) == 0 || slices.Contains(d.Environments, environment)
 }
 
 // URITrustDomain returns the authored URI trust domain with this name, or

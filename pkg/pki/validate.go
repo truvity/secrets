@@ -327,7 +327,34 @@ func (d *DNSTrustDomain) validate(global Global, generations map[string]generati
 		return err
 	}
 
+	// Left out, the list means every environment; stated, it names each
+	// once. A stated empty list is the same as leaving it out.
+	if _, err := validateEnvironments(path, d.Environments); err != nil {
+		return err
+	}
+
 	return validateCredentialRoles(path+".credentialRoles", d.CredentialRoles, d.Roles, global, leafDefault, leafMaximum)
+}
+
+// validateEnvironments checks a trust domain's environments list: bare
+// names, each once. It returns the names as a set.
+func validateEnvironments(path string, environments []string) (map[string]struct{}, error) {
+	seen := make(map[string]struct{}, len(environments))
+
+	for i, environment := range environments {
+		envPath := fmt.Sprintf("%s.environments[%d]", path, i)
+		if !isDNSLabel(environment) {
+			return nil, fmt.Errorf("pki: %s %q is not a bare environment name", envPath, environment)
+		}
+
+		if _, duplicate := seen[environment]; duplicate {
+			return nil, fmt.Errorf("pki: %s duplicates %q", envPath, environment)
+		}
+
+		seen[environment] = struct{}{}
+	}
+
+	return seen, nil
 }
 
 // validate checks the domain intermediate's template: a DNS-safe issuer
@@ -426,19 +453,9 @@ func (d *URITrustDomain) validate(global Global, generations map[string]generati
 		return fmt.Errorf("pki: %s.environments must name at least one environment", path)
 	}
 
-	seenEnvironments := map[string]struct{}{}
-
-	for i, environment := range d.Environments {
-		envPath := fmt.Sprintf("%s.environments[%d]", path, i)
-		if !isDNSLabel(environment) {
-			return fmt.Errorf("pki: %s %q is not a bare environment name", envPath, environment)
-		}
-
-		if _, duplicate := seenEnvironments[environment]; duplicate {
-			return fmt.Errorf("pki: %s duplicates %q", envPath, environment)
-		}
-
-		seenEnvironments[environment] = struct{}{}
+	seenEnvironments, err := validateEnvironments(path, d.Environments)
+	if err != nil {
+		return err
 	}
 
 	if len(d.RootSignedEnvironments) == 0 && shared {
