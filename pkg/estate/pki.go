@@ -25,7 +25,9 @@ type (
 		Root RootAuthority `yaml:"root"`
 		// Roots are the other active root generations some trust domain is
 		// declared under, in authored order: empty with one root, one per
-		// further party with a root of its own.
+		// further party with a root of its own. Like Root, it is a VIEW for
+		// a reader and a consumer: nothing is applied from it (a root's key
+		// lives outside the server).
 		Roots   []RootAuthority   `yaml:"roots,omitempty"`
 		Domains []DomainAuthority `yaml:"domains"`
 		// Pending are the domain intermediates the root has not signed yet

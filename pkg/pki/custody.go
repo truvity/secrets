@@ -122,9 +122,10 @@ func ParseCustodyOutputs(raw []byte) (*CustodyOutputs, error) {
 }
 
 // Validate checks the outputs against themselves: both roles are IAM roles
-// of one account and partition and are two different roles, and every
+// of one account and partition and are two different roles, every
 // generation is a multi-region key whose primary and replica are the same
-// key in two regions, in that account, with the stack's ceremony role.
+// key in two regions, in that account, with the stack's ceremony role, and
+// no two generations name the same primary or replica key.
 func (o *CustodyOutputs) Validate() error {
 	admin, err := parseRoleARN(o.AdminRoleARN)
 	if err != nil {
@@ -149,9 +150,31 @@ func (o *CustodyOutputs) Validate() error {
 		return fmt.Errorf("at least one generation is required")
 	}
 
+	// One key is one generation's: two generations naming the same key
+	// would let a ceremony for one sign with the other's root.
+	keys := map[string]string{}
+	claim := func(id, field, keyARN string) error {
+		if owner, taken := keys[keyARN]; taken {
+			return fmt.Errorf("generation %q: %s %s is also generation %q's", id, field, keyARN, owner)
+		}
+
+		keys[keyARN] = id
+
+		return nil
+	}
+
 	for _, id := range sortedKeys(o.Generations) {
-		if err := o.Generations[id].validate(id, o.CeremonyRoleARN, ceremony); err != nil {
+		generation := o.Generations[id]
+		if err := generation.validate(id, o.CeremonyRoleARN, ceremony); err != nil {
 			return fmt.Errorf("generation %q: %w", id, err)
+		}
+
+		if err := claim(id, "primaryKeyArn", generation.PrimaryKeyARN); err != nil {
+			return err
+		}
+
+		if err := claim(id, "replicaKeyArn", generation.ReplicaKeyARN); err != nil {
+			return err
 		}
 	}
 

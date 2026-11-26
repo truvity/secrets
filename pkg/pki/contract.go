@@ -247,9 +247,11 @@ type (
 		Name   string `yaml:"name"`
 		Suffix string `yaml:"suffix"`
 		// RootGeneration is the root generation that signs this domain's
-		// intermediate. It must be an active one to derive. Left empty, it
-		// is the contract's one active generation ([Contract.Validate]
-		// fills it in); with several active generations it is required.
+		// intermediate. It must be an active one to derive; a preparing or
+		// retiring one validates (a rotation names the next root before it
+		// is active) and is refused only when deriving. Left empty, it is
+		// the contract's one active generation ([Contract.Validate] fills it
+		// in, in place); with several active generations it is required.
 		RootGeneration string `yaml:"rootGeneration"`
 		// RequireTrusted marks a domain whose active generation must
 		// always appear in [Migration.TrustedGenerations]: a leaf this

@@ -216,9 +216,9 @@ func TestCustodyOutputsOfAnotherAccountAreRefused(t *testing.T) {
 	mixed := validOutputs()
 	mixed.Generations[vendorRoot] = CustodyGeneration{
 		Alias:           custody.DefaultAliasPrefix + vendorRoot,
-		PrimaryKeyARN:   testKey,
+		PrimaryKeyARN:   strings.Replace(testKey, "mrk-example", "mrk-vendor", 1),
 		PrimaryRegion:   "eu-central-1",
-		ReplicaKeyARN:   testReplica,
+		ReplicaKeyARN:   strings.Replace(testReplica, "mrk-example", "mrk-vendor", 1),
 		ReplicaRegion:   "eu-north-1",
 		CeremonyRoleARN: testRole,
 	}
@@ -265,4 +265,53 @@ func TestEmergencyServerSpecIsPerRoot(t *testing.T) {
 	contract.RootGeneration(vendorRoot).State = GenerationPreparing
 	_, err = contract.EmergencyServerSpec(vendorRoot, "emergency.edge.example.org", notBefore)
 	require.ErrorContains(t, err, "only an active generation signs a break-glass leaf")
+}
+
+func TestAKeyIsOneGenerationsOnly(t *testing.T) {
+	cases := map[string]func(*CustodyOutputs){
+		// The same multi-region key, its replica in another region.
+		"repeated primary key": func(o *CustodyOutputs) {
+			second := o.Generations["example-root-2026-01"]
+			second.Alias = custody.DefaultAliasPrefix + "example-root-2027-01"
+			second.ReplicaRegion = "eu-west-1"
+			second.ReplicaKeyARN = strings.Replace(testReplica, "eu-north-1", "eu-west-1", 1)
+			o.Generations["example-root-2027-01"] = second
+		},
+		// The same multi-region key, its primary in another region.
+		"repeated replica key": func(o *CustodyOutputs) {
+			second := o.Generations["example-root-2026-01"]
+			second.Alias = custody.DefaultAliasPrefix + "example-root-2027-01"
+			second.PrimaryRegion = "eu-west-3"
+			second.PrimaryKeyARN = strings.Replace(testKey, "eu-central-1", "eu-west-3", 1)
+			o.Generations["example-root-2027-01"] = second
+		},
+	}
+
+	want := map[string]string{
+		"repeated primary key": `generation "example-root-2027-01": primaryKeyArn ` + testKey + ` is also generation "example-root-2026-01"'s`,
+		"repeated replica key": `generation "example-root-2027-01": replicaKeyArn ` + testReplica + ` is also generation "example-root-2026-01"'s`,
+	}
+
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			outputs := validOutputs()
+			mutate(outputs)
+			require.ErrorContains(t, outputs.Validate(), want[name])
+		})
+	}
+}
+
+func TestAnActiveRootWithDomainsMustBeTrusted(t *testing.T) {
+	// The internal domain does not require trust itself: the root does.
+	contract := validContract()
+	contract.Generations = append(contract.Generations, vendorGeneration(contract.Generations[0]))
+	contract.TrustDomains.DNS[0].RootGeneration = vendorRoot
+
+	wantValidateError(t, contract,
+		`root generation "vendor-a-root-2026-11" is active and has trust domains below it, but migration.trustedGenerations omits it`)
+
+	// An active root nothing is declared under yet needs no trust.
+	idle := validContract()
+	idle.Generations = append(idle.Generations, vendorGeneration(idle.Generations[0]))
+	require.NoError(t, idle.Validate())
 }
