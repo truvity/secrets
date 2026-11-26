@@ -577,6 +577,12 @@ func TestRolesSignNoNameOfAnotherDomain(t *testing.T) {
 			`catalog name "*.private" nests with trust domain private's "example.private"`},
 		"a wildcard under another domain": {"*.dev.vendor-a.example",
 			`nests with trust domain vendor-a's "vendor-a.example"`},
+		"a name with a trailing dot": {"vault.dev.example.private.",
+			`catalog name "vault.dev.example.private." is not a lower-case DNS name`},
+		"a name with a trailing blank": {"vault.dev.example.private ",
+			`catalog name "vault.dev.example.private " is not a lower-case DNS name`},
+		"a bare wildcard": {"*",
+			`catalog name "*" is not a lower-case DNS name`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			environments := vendorEnvironments()
