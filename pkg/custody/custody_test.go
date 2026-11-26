@@ -649,3 +649,162 @@ func TestCustodyOptionRefusals(t *testing.T) {
 		})
 	}
 }
+
+// strictArgs are testArgs with the vendor-root rules and what they rest on.
+func strictArgs() Args {
+	args := testArgs()
+	args.BreakGlassPrincipalARNPattern = testBreakGlass
+	args.StrictRoot = true
+	return args
+}
+
+func strictPolicy(t *testing.T, replicaRegion string) map[string]map[string]any {
+	t.Helper()
+	policy, err := keyPolicy(DefaultPartition, testAccount, testPattern,
+		"arn:aws:iam::111122223333:role/private-pki-root-admin",
+		"arn:aws:iam::111122223333:role/private-pki-root-ceremony",
+		policyOptions{breakGlassPrincipalARNPattern: testBreakGlass, strictRoot: true, replicaRegion: replicaRegion},
+	)
+	require.NoError(t, err)
+	return policyStatements(t, policy)
+}
+
+// Under StrictRoot with a replica region: the Deny also covers making a
+// replica the primary and the grant calls; the administrators may replicate
+// the root to its planned region and nowhere else; no principal may schedule
+// a deletion under 30 days; the ceremony signs a digest only.
+func TestStrictRootKeyPolicy(t *testing.T) {
+	statements := strictPolicy(t, testReplica)
+	require.Len(t, statements, 8)
+
+	deny := statements["DenyDestructiveExceptBreakGlass"]
+	require.NotNil(t, deny)
+	assert.ElementsMatch(t, []string{
+		"kms:ScheduleKeyDeletion", "kms:DisableKey", "kms:PutKeyPolicy", "kms:CreateGrant", "kms:ImportKeyMaterial",
+		"kms:UpdatePrimaryRegion", "kms:RetireGrant", "kms:RevokeGrant",
+	}, actionsOf(t, deny))
+	assert.Equal(t, StrictRootBreakGlassOnlyActions(), actionsOf(t, deny))
+
+	// The planned replica is made by the applying administrator, so the
+	// administration keeps ReplicateKey; a Deny pins it to the one region.
+	for _, sid := range []string{"KeyAdministrationWithoutSigningOrDeletion", "KeyAdministrationByApprovedSSOAdmin"} {
+		actions := actionsOf(t, statements[sid])
+		assert.Contains(t, actions, "kms:ReplicateKey", sid)
+		assert.NotContains(t, actions, "kms:UpdatePrimaryRegion", sid)
+		assert.NotContains(t, actions, "kms:DisableKey", sid)
+		assert.Len(t, actions, len(adminActions)-2, "%s drops DisableKey and UpdatePrimaryRegion and nothing else", sid)
+	}
+	elsewhere := statements["DenyReplicationElsewhereExceptBreakGlass"]
+	require.NotNil(t, elsewhere)
+	assert.Equal(t, policyDeny, elsewhere[policyEffectKey])
+	assert.Equal(t, map[string]any{policyAWSKey: "*"}, elsewhere[policyPrincipalKey])
+	assert.Equal(t, "kms:ReplicateKey", elsewhere[policyActionKey])
+	assert.Equal(t, map[string]any{
+		policyStringNotEquals: map[string]any{kmsReplicaRegion: testReplica},
+		policyArnNotLikeKey:   map[string]any{policyPrincipalARNKey: testBreakGlass},
+	}, elsewhere[policyConditionKey])
+
+	window := statements["DenyDeletionWindowUnder30Days"]
+	require.NotNil(t, window)
+	assert.Equal(t, policyDeny, window[policyEffectKey])
+	assert.Equal(t, map[string]any{policyAWSKey: "*"}, window[policyPrincipalKey], "the break-glass principal included")
+	assert.Equal(t, "kms:ScheduleKeyDeletion", window[policyActionKey])
+	assert.Equal(t, map[string]any{
+		policyNumericLessThan: map[string]any{kmsPendingWindowDays: float64(30)},
+	}, window[policyConditionKey])
+
+	assert.Equal(t, map[string]any{
+		policyStringEqualsKey: map[string]any{kmsSigningAlgorithm: ecdsaSHA384, kmsMessageType: messageTypeDigest},
+	}, statements["ExplicitRootCeremonySign"][policyConditionKey])
+}
+
+// A strict root without a replica region has nowhere to be replicated:
+// ReplicateKey is break-glass only, like the other region move.
+func TestStrictRootWithoutAReplicaKeepsReplicationForBreakGlass(t *testing.T) {
+	statements := strictPolicy(t, "")
+	require.Len(t, statements, 7)
+	assert.NotContains(t, statements, "DenyReplicationElsewhereExceptBreakGlass")
+	assert.Contains(t, actionsOf(t, statements["DenyDestructiveExceptBreakGlass"]), "kms:ReplicateKey")
+	for _, sid := range []string{"KeyAdministrationWithoutSigningOrDeletion", "KeyAdministrationByApprovedSSOAdmin"} {
+		assert.NotContains(t, actionsOf(t, statements[sid]), "kms:ReplicateKey", sid)
+	}
+}
+
+// Without StrictRoot the ceremony's Sign condition is the algorithm alone,
+// as it always was (the goldens hold the whole documents byte for byte).
+func TestKeyPolicyWithoutStrictRootKeepsTheSignCondition(t *testing.T) {
+	policy, err := keyPolicy(DefaultPartition, testAccount, testPattern, "admin", "ceremony",
+		policyOptions{breakGlassPrincipalARNPattern: testBreakGlass, replicaRegion: testReplica})
+	require.NoError(t, err)
+	statements := policyStatements(t, policy)
+	assert.Equal(t, map[string]any{
+		policyStringEqualsKey: map[string]any{kmsSigningAlgorithm: ecdsaSHA384},
+	}, statements["ExplicitRootCeremonySign"][policyConditionKey])
+	assert.Equal(t, BreakGlassOnlyActions(), actionsOf(t, statements["DenyDestructiveExceptBreakGlass"]))
+	assert.NotContains(t, statements, "DenyReplicationElsewhereExceptBreakGlass")
+	assert.NotContains(t, statements, "DenyDeletionWindowUnder30Days")
+}
+
+func TestStrictRootBreakGlassOnlyActionsIsACopy(t *testing.T) {
+	actions := StrictRootBreakGlassOnlyActions()
+	actions[0] = "kms:Decrypt"
+	assert.NotContains(t, StrictRootBreakGlassOnlyActions(), "kms:Decrypt")
+	assert.NotContains(t, BreakGlassOnlyActions(), "kms:UpdatePrimaryRegion", "the base list is unchanged")
+}
+
+// Under StrictRoot each region's rule also matches the two calls that start
+// a root's destruction, and both keys carry the strict policy pinned to the
+// generation's own replica region.
+func TestDeployWithStrictRoot(t *testing.T) {
+	resources := deploy(t, strictArgs())
+
+	rules := resources["aws:cloudwatch/eventRule:EventRule"]
+	require.Len(t, rules, 2)
+	for _, rule := range rules {
+		var pattern signPattern
+		require.NoError(t, json.Unmarshal([]byte(rule.Inputs["eventPattern"].StringValue()), &pattern))
+		assert.Equal(t, []string{"Sign", "ScheduleKeyDeletion", "DisableKey", "ReplicateKey", "PutKeyPolicy", "UpdatePrimaryRegion"}, pattern.Detail.EventName)
+		assert.Contains(t, rule.Inputs["description"].StringValue(), "ScheduleKeyDeletion")
+	}
+	require.Len(t, resources["aws:cloudwatch/metricAlarm:MetricAlarm"], 2)
+
+	keys := slices.Concat(resources["aws:kms/key:Key"], resources["aws:kms/replicaKey:ReplicaKey"])
+	require.Len(t, keys, 2)
+	for _, key := range keys {
+		assert.Equal(t, float64(DefaultDeletionWindowDays), key.Inputs["deletionWindowInDays"].NumberValue(), key.Name)
+		statements := policyStatements(t, key.Inputs["policy"].StringValue())
+		elsewhere := statements["DenyReplicationElsewhereExceptBreakGlass"]
+		require.NotNil(t, elsewhere, key.Name)
+		assert.Equal(t, map[string]any{kmsReplicaRegion: testReplica}, elsewhere[policyConditionKey].(map[string]any)[policyStringNotEquals], key.Name)
+		assert.Contains(t, statements, "DenyDeletionWindowUnder30Days", key.Name)
+	}
+}
+
+func TestSignEventPatternWithTheStrictRootEvents(t *testing.T) {
+	raw, err := signEventPattern(primaryKeyARN, "mrk-primary", "alias/x", primaryAliasARN, alertEventNames(true)...)
+	require.NoError(t, err)
+	var pattern signPattern
+	require.NoError(t, json.Unmarshal([]byte(raw), &pattern))
+	assert.Equal(t, []string{"Sign", "ScheduleKeyDeletion", "DisableKey", "ReplicateKey", "PutKeyPolicy", "UpdatePrimaryRegion"}, pattern.Detail.EventName)
+	assert.Equal(t, []string{"Sign"}, alertEventNames(false))
+}
+
+func TestStrictRootRefusals(t *testing.T) {
+	for name, mutate := range map[string]func(*Args){
+		"without a break-glass pattern":  func(a *Args) { a.BreakGlassPrincipalARNPattern = "" },
+		"with a shorter deletion window": func(a *Args) { a.DeletionWindowDays = 7 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			args := strictArgs()
+			mutate(&args)
+			mocks := &custodyMocks{}
+			err := pulumi.RunErr(func(ctx *pulumi.Context) error {
+				_, err := Deploy(ctx, args)
+				return err
+			}, pulumi.WithMocks("example", "private-pki-root", mocks))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "StrictRoot")
+			assert.Empty(t, mocks.resourcesByType(), "nothing is registered before the refusal")
+		})
+	}
+}

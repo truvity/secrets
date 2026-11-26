@@ -109,6 +109,26 @@ type (
 		// aws:MultiFactorAuthPresent, so a Bool condition on it would lock
 		// every ceremony out.
 		CeremonyTrustConditions []TrustCondition
+		// StrictRoot applies the strict root rules, for a root that a whole
+		// PKI hangs from, on top of the break-glass Deny, which it requires:
+		//
+		//   - kms:UpdatePrimaryRegion, kms:RetireGrant and kms:RevokeGrant
+		//     join the break-glass-only actions
+		//     (StrictRootBreakGlassOnlyActions); kms:ReplicateKey is refused
+		//     to all but break-glass except towards the generation's own
+		//     replica region (break-glass only when it has none), so the
+		//     apply makes the planned replica and no other;
+		//   - kms:ScheduleKeyDeletion with a window under 30 days is denied
+		//     to every principal, break-glass included;
+		//   - the ceremony may sign a DIGEST only (kms:MessageType), beside
+		//     ECDSA_SHA_384;
+		//   - the alert rule of each region matches kms:ScheduleKeyDeletion
+		//     and kms:DisableKey on the key as well as kms:Sign;
+		//   - DeletionWindowDays must be 30, the longest KMS allows.
+		//
+		// The zero value renders every document as before it existed, so a
+		// custody already deployed is not changed by this module's upgrade.
+		StrictRoot bool
 		// Tags returns the tags for one group of resources; nil tags
 		// nothing.
 		Tags func(TagScope) map[string]string
@@ -272,6 +292,9 @@ func (a Args) validate() error {
 	if err := a.validateBreakGlass(); err != nil {
 		return err
 	}
+	if err := a.validateStrictRoot(); err != nil {
+		return err
+	}
 	return validateTrustConditions(a.CeremonyTrustConditions)
 }
 
@@ -289,6 +312,21 @@ func (a Args) validateBreakGlass() error {
 	}
 	if pattern == a.TrustedPrincipalARNPattern {
 		return fmt.Errorf("the break-glass principal pattern must differ from the trusted administrators' pattern")
+	}
+	return nil
+}
+
+// validateStrictRoot refuses the vendor-root rules without what they rest
+// on: the break-glass Deny they extend, and the 30-day deletion window.
+func (a Args) validateStrictRoot() error {
+	if !a.StrictRoot {
+		return nil
+	}
+	if a.BreakGlassPrincipalARNPattern == "" {
+		return fmt.Errorf("StrictRoot requires a break-glass principal pattern")
+	}
+	if a.DeletionWindowDays != DefaultDeletionWindowDays {
+		return fmt.Errorf("StrictRoot requires a %d-day deletion window, got %d", DefaultDeletionWindowDays, a.DeletionWindowDays)
 	}
 	return nil
 }
@@ -383,8 +421,10 @@ func deployGeneration(
 	provider, replicaProvider *awspulumi.Provider,
 	extra []pulumi.ResourceOption,
 ) (*GenerationKeys, error) {
+	options := args.policyOptions()
+	options.replicaRegion = generation.ReplicaRegion
 	policy := pulumi.All(adminRoleARN, ceremonyRoleARN).ApplyT(func(values []any) (string, error) {
-		return keyPolicy(args.Partition, args.AccountID, args.TrustedPrincipalARNPattern, values[0].(string), values[1].(string), args.policyOptions())
+		return keyPolicy(args.Partition, args.AccountID, args.TrustedPrincipalARNPattern, values[0].(string), values[1].(string), options)
 	}).(pulumi.StringOutput)
 	// KMS refuses a policy that would stop the caller from writing the next
 	// one, unless told not to check. With the break-glass Deny that refusal

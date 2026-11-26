@@ -107,13 +107,20 @@ func deploySignAlerts(ctx *pulumi.Context, args Args, scope signAlertScope, extr
 		}
 	}
 
+	events := alertEventNames(args.StrictRoot)
 	pattern := pulumi.All(scope.keyARN, scope.keyID).ApplyT(func(values []any) (string, error) {
-		return signEventPattern(values[0].(string), values[1].(string), scope.alias, arn(args.Partition, "kms", scope.region, args.AccountID, scope.alias))
+		return signEventPattern(values[0].(string), values[1].(string), scope.alias, arn(args.Partition, "kms", scope.region, args.AccountID, scope.alias), events...)
 	}).(pulumi.StringOutput)
+
+	description := "Every kms:Sign with private PKI root " + scope.generation + " in " + scope.region
+	if args.StrictRoot {
+		description = "Every kms:Sign, ScheduleKeyDeletion, DisableKey, ReplicateKey, PutKeyPolicy or UpdatePrimaryRegion" +
+			" of private PKI root " + scope.generation + " in " + scope.region
+	}
 
 	rule, err := cloudwatch.NewEventRule(ctx, prefix+"-rule", &cloudwatch.EventRuleArgs{
 		Name:         pulumi.String(name),
-		Description:  pulumi.String("Every kms:Sign with private PKI root " + scope.generation + " in " + scope.region),
+		Description:  pulumi.String(description),
 		EventPattern: pattern,
 		Tags:         tags,
 	}, opts...)
@@ -157,21 +164,36 @@ func deploySignAlerts(ctx *pulumi.Context, args Args, scope signAlertScope, extr
 	return nil
 }
 
-// signEventPattern matches kms:Sign on one key, by every name a caller can
-// use to reach it. CloudTrail records the key under detail.resources[].ARN,
+// alertEventNames are the KMS calls the alert rule matches: Sign alone, or
+// under Args.StrictRoot also the two that start a root's destruction and the
+// three that change who may sign or where the root lives. ReplicateKey sets
+// the new replica's own key policy, so an administrator re-replicating after
+// a replica's deletion could grant itself Sign there: every such call pages.
+func alertEventNames(strictRoot bool) []string {
+	if strictRoot {
+		return []string{"Sign", "ScheduleKeyDeletion", "DisableKey", "ReplicateKey", "PutKeyPolicy", "UpdatePrimaryRegion"}
+	}
+	return []string{"Sign"}
+}
+
+// signEventPattern matches kms:Sign (or the given events, when any are
+// given) on one key, by every name a caller can use to reach it. CloudTrail records the key under detail.resources[].ARN,
 // and the caller's own spelling under requestParameters.keyId -- which may
 // be the key ARN, the bare key id, the alias name or the alias ARN. Both
 // anchors are accepted because missing THIS event costs more than an extra
 // page: if either one names the root key, a human is told.
-func signEventPattern(keyARN, keyID, alias, aliasARN string) (string, error) {
+func signEventPattern(keyARN, keyID, alias, aliasARN string, events ...string) (string, error) {
 	names := []string{keyARN, aliasARN, keyID, alias}
+	if len(events) == 0 {
+		events = []string{"Sign"}
+	}
 
 	return marshalPolicy(map[string]any{
 		"source":      []string{"aws.kms"},
 		"detail-type": []string{"AWS API Call via CloudTrail"},
 		"detail": map[string]any{
 			"eventSource": []string{"kms.amazonaws.com"},
-			"eventName":   []string{"Sign"},
+			"eventName":   events,
 			"$or": []map[string]any{
 				{"resources": map[string]any{"ARN": []string{keyARN, aliasARN}}},
 				{"requestParameters": map[string]any{"keyId": names}},
