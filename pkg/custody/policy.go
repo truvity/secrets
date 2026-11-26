@@ -18,6 +18,8 @@ const (
 	policyStringEqualsKey = "StringEquals"
 	policyArnLikeKey      = "ArnLike"
 	policyArnNotLikeKey   = "ArnNotLike"
+	policyStringNotEquals = "StringNotEquals"
+	policyNumericLessThan = "NumericLessThan"
 	policyPrincipalARNKey = "aws:PrincipalArn"
 	policyAWSKey          = "AWS"
 	policyAllow           = "Allow"
@@ -26,7 +28,13 @@ const (
 	policyVersion         = "2012-10-17"
 	kmsDescribeKey        = "kms:DescribeKey"
 	kmsSigningAlgorithm   = "kms:SigningAlgorithm"
+	kmsMessageType        = "kms:MessageType"
 	ecdsaSHA384           = "ECDSA_SHA_384"
+	messageTypeDigest     = "DIGEST"
+	kmsReplicaRegion      = "kms:ReplicaRegion"
+	kmsReplicateKey       = "kms:ReplicateKey"
+	kmsScheduleDeletion   = "kms:ScheduleKeyDeletion"
+	kmsPendingWindowDays  = "kms:ScheduleKeyDeletionPendingWindowInDays"
 )
 
 var (
@@ -69,7 +77,29 @@ var (
 		"kms:PutKeyPolicy",
 		"kms:ScheduleKeyDeletion",
 	}
+
+	// strictRootBreakGlassOnlyActions are added to breakGlassOnlyActions
+	// under Args.StrictRoot: making a replica the primary, and the two grant
+	// calls (no grant can exist without CreateGrant; denied for clarity).
+	// kms:ReplicateKey is handled apart (keyPolicy): break-glass only for a
+	// root without a replica region, and for one with a replica region
+	// refused everywhere but there, so the apply can make the planned replica.
+	strictRootBreakGlassOnlyActions = []string{
+		"kms:RetireGrant",
+		"kms:RevokeGrant",
+		"kms:UpdatePrimaryRegion",
+	}
 )
+
+// StrictRootBreakGlassOnlyActions returns the actions a key policy denies to
+// every principal but the break-glass pattern under Args.StrictRoot, sorted:
+// BreakGlassOnlyActions, UpdatePrimaryRegion, RetireGrant and RevokeGrant.
+// For a root without a replica region the Deny lists kms:ReplicateKey too.
+func StrictRootBreakGlassOnlyActions() []string {
+	actions := append(slices.Clone(breakGlassOnlyActions), strictRootBreakGlassOnlyActions...)
+	slices.Sort(actions)
+	return actions
+}
 
 // BreakGlassOnlyActions returns the actions a key policy denies to every
 // principal but the break-glass pattern when Args.BreakGlassPrincipalARNPattern
@@ -84,12 +114,30 @@ func BreakGlassOnlyActions() []string {
 type policyOptions struct {
 	breakGlassPrincipalARNPattern string
 	ceremonyTrustConditions       []TrustCondition
+	strictRoot                    bool
+	// replicaRegion is the generation's replica region, read under
+	// strictRoot only; empty for a root without a replica.
+	replicaRegion string
+}
+
+// breakGlassOnly is the action list of the break-glass Deny.
+func (o policyOptions) breakGlassOnly() []string {
+	if !o.strictRoot {
+		return breakGlassOnlyActions
+	}
+	actions := StrictRootBreakGlassOnlyActions()
+	if o.replicaRegion == "" {
+		actions = append(actions, kmsReplicateKey)
+		slices.Sort(actions)
+	}
+	return actions
 }
 
 func (a Args) policyOptions() policyOptions {
 	return policyOptions{
 		breakGlassPrincipalARNPattern: a.BreakGlassPrincipalARNPattern,
 		ceremonyTrustConditions:       a.CeremonyTrustConditions,
+		strictRoot:                    a.StrictRoot,
 	}
 }
 
@@ -152,10 +200,15 @@ func roleTrustPolicy(partition, accountID, trustedPrincipalARNPattern string, ex
 func keyPolicy(partition, accountID, trustedPrincipalARNPattern, adminRoleARN, ceremonyRoleARN string, options policyOptions) (string, error) {
 	accountRoot := arn(partition, "iam", "", accountID, "root")
 	administration := adminActions
+	denied := options.breakGlassOnly()
 	if options.breakGlassPrincipalARNPattern != "" {
 		administration = slices.DeleteFunc(slices.Clone(adminActions), func(action string) bool {
-			return slices.Contains(breakGlassOnlyActions, action)
+			return slices.Contains(denied, action)
 		})
+	}
+	signCondition := map[string]any{kmsSigningAlgorithm: ecdsaSHA384}
+	if options.strictRoot {
+		signCondition[kmsMessageType] = messageTypeDigest
 	}
 	statements := []map[string]any{
 		{
@@ -196,16 +249,49 @@ func keyPolicy(partition, accountID, trustedPrincipalARNPattern, adminRoleARN, c
 			policyActionKey:    "kms:Sign",
 			policyResourceKey:  "*",
 			policyConditionKey: map[string]any{
-				policyStringEqualsKey: map[string]any{kmsSigningAlgorithm: ecdsaSHA384},
+				policyStringEqualsKey: signCondition,
 			},
 		},
+	}
+	if options.strictRoot {
+		// The window is a key input too, but a direct API call could pass a
+		// shorter one: refuse it to every principal, the break-glass one
+		// included. Changing it means rewriting this policy, which is
+		// break-glass.
+		statements = append(statements, map[string]any{
+			policySidKey:       "DenyDeletionWindowUnder30Days",
+			policyEffectKey:    policyDeny,
+			policyPrincipalKey: map[string]any{policyAWSKey: policyAnyPrincipal},
+			policyActionKey:    kmsScheduleDeletion,
+			policyResourceKey:  "*",
+			policyConditionKey: map[string]any{
+				policyNumericLessThan: map[string]any{kmsPendingWindowDays: DefaultDeletionWindowDays},
+			},
+		})
+		if options.replicaRegion != "" {
+			// The administrators may replicate the root to its one planned
+			// region (the apply creates the replica that way) and nowhere
+			// else; the break-glass principal is exempt, as from the Deny
+			// below. A second replica in that region fails anyway: it exists.
+			statements = append(statements, map[string]any{
+				policySidKey:       "DenyReplicationElsewhereExceptBreakGlass",
+				policyEffectKey:    policyDeny,
+				policyPrincipalKey: map[string]any{policyAWSKey: policyAnyPrincipal},
+				policyActionKey:    kmsReplicateKey,
+				policyResourceKey:  "*",
+				policyConditionKey: map[string]any{
+					policyStringNotEquals: map[string]any{kmsReplicaRegion: options.replicaRegion},
+					policyArnNotLikeKey:   map[string]any{policyPrincipalARNKey: options.breakGlassPrincipalARNPattern},
+				},
+			})
+		}
 	}
 	if options.breakGlassPrincipalARNPattern != "" {
 		statements = append(statements, map[string]any{
 			policySidKey:       "DenyDestructiveExceptBreakGlass",
 			policyEffectKey:    policyDeny,
 			policyPrincipalKey: map[string]any{policyAWSKey: policyAnyPrincipal},
-			policyActionKey:    breakGlassOnlyActions,
+			policyActionKey:    denied,
 			policyResourceKey:  "*",
 			// ArnNotLike holds when the key is absent, so a caller with no
 			// principal ARN at all (a service acting on its own) is denied

@@ -102,6 +102,38 @@ and `BoolIfExists` would always pass. Multi-factor authentication for such
 sessions is the identity provider's; what the trust can narrow is which
 session may assume the role, for example one person's `aws:userid`.
 
+## Strict root: the vendor-root rules
+
+**`StrictRoot`** applies one more set of rules, for a root that a vendor's
+PKI hangs from. It needs `BreakGlassPrincipalARNPattern`, and it refuses any
+deletion window but 30 days. Off by default; without it every document
+renders exactly as before, so a custody already deployed sees no change.
+
+| What | Without `StrictRoot` | With it |
+|---|---|---|
+| Break-glass-only actions | `custody.BreakGlassOnlyActions()` | also `UpdatePrimaryRegion`, `RetireGrant` and `RevokeGrant` (`custody.StrictRootBreakGlassOnlyActions()`); `ReplicateKey` too for a root without a replica region |
+| `ReplicateKey` | administration | `DenyReplicationElsewhereExceptBreakGlass`: refused to all but break-glass unless `kms:ReplicaRegion` is the generation's own replica region. The apply makes the planned replica as the administrator; no other region is possible, and a second replica there fails because it exists |
+| The ceremony's `Sign` | `kms:SigningAlgorithm` `ECDSA_SHA_384` | also `kms:MessageType` `DIGEST`: the ceremony signs a digest it computed, never a message KMS would hash |
+| The alert rule, in each region | `Sign` | `Sign`, `ScheduleKeyDeletion`, `DisableKey`, `ReplicateKey`, `PutKeyPolicy` and `UpdatePrimaryRegion`: the start of a root's destruction, and every change of who may sign or where the root lives, pages a human like a signature does |
+| Deletion window | 7 to 30 days | 30 days only, as the key input and in the policy: `DenyDeletionWindowUnder30Days` refuses `ScheduleKeyDeletion` with `kms:ScheduleKeyDeletionPendingWindowInDays` under 30 to every principal, break-glass included, so a direct API call cannot shorten it |
+
+Without `StrictRoot` every document is byte-for-byte what the module
+rendered before the option existed: `pkg/custody/testdata/golden/` holds the
+key policies, the event pattern and every declared resource input, written
+by that earlier module, and a test compares them.
+
+Why `ReplicateKey` pages: a replication sets the new replica's own key
+policy. If break-glass ever deleted the replica, an administrator could
+replicate the root there again with a policy that grants itself `Sign`; the
+region Deny cannot stop that, the alert makes it seen. The first apply of a
+strict custody replicates the root once, so it raises this alert by design,
+as the ceremony raises the `Sign` one.
+
+`pkg/kmssigner` already signs with `MessageType` `DIGEST`, so the ceremony
+needs no change. A custody switched to `StrictRoot` after its keys exist
+changes the key policies, which is a break-glass act (see above), not an
+apply: turn it on when the keys are first created.
+
 ## The Sign alarm
 
 After the ceremony a root key signs two or three times in its life, so

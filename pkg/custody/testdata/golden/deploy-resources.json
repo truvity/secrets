@@ -1,0 +1,289 @@
+[
+  {
+    "type": "aws:cloudwatch/eventRule:EventRule",
+    "name": "example-root-2026-01-sign-alert-eu-example-1-rule",
+    "inputs": {
+      "description": "Every kms:Sign with private PKI root example-root-2026-01 in eu-example-1",
+      "eventPattern": "{\"detail\":{\"$or\":[{\"resources\":{\"ARN\":[\"arn:aws:kms:eu-example-1:111122223333:key/mrk-primary\",\"arn:aws:kms:eu-example-1:111122223333:alias/private-pki/root/example-root-2026-01\"]}},{\"requestParameters\":{\"keyId\":[\"arn:aws:kms:eu-example-1:111122223333:key/mrk-primary\",\"arn:aws:kms:eu-example-1:111122223333:alias/private-pki/root/example-root-2026-01\",\"mrk-primary\",\"alias/private-pki/root/example-root-2026-01\"]}}],\"eventName\":[\"Sign\"],\"eventSource\":[\"kms.amazonaws.com\"]},\"detail-type\":[\"AWS API Call via CloudTrail\"],\"source\":[\"aws.kms\"]}",
+      "name": "private-pki-root-sign-example-root-2026-01",
+      "tags": {
+        "scope": "sign-alert/example-root-2026-01"
+      }
+    }
+  },
+  {
+    "type": "aws:cloudwatch/eventRule:EventRule",
+    "name": "example-root-2026-01-sign-alert-eu-example-2-rule",
+    "inputs": {
+      "description": "Every kms:Sign with private PKI root example-root-2026-01 in eu-example-2",
+      "eventPattern": "{\"detail\":{\"$or\":[{\"resources\":{\"ARN\":[\"arn:aws:kms:eu-example-2:111122223333:key/mrk-primary\",\"arn:aws:kms:eu-example-2:111122223333:alias/private-pki/root/example-root-2026-01\"]}},{\"requestParameters\":{\"keyId\":[\"arn:aws:kms:eu-example-2:111122223333:key/mrk-primary\",\"arn:aws:kms:eu-example-2:111122223333:alias/private-pki/root/example-root-2026-01\",\"mrk-primary\",\"alias/private-pki/root/example-root-2026-01\"]}}],\"eventName\":[\"Sign\"],\"eventSource\":[\"kms.amazonaws.com\"]},\"detail-type\":[\"AWS API Call via CloudTrail\"],\"source\":[\"aws.kms\"]}",
+      "name": "private-pki-root-sign-example-root-2026-01",
+      "tags": {
+        "scope": "sign-alert/example-root-2026-01"
+      }
+    }
+  },
+  {
+    "type": "aws:cloudwatch/eventTarget:EventTarget",
+    "name": "example-root-2026-01-sign-alert-eu-example-1-target",
+    "inputs": {
+      "arn": "arn:aws:sns:eu-example-1:111122223333:private-pki-root-sign-example-root-2026-01",
+      "rule": "private-pki-root-sign-example-root-2026-01",
+      "targetId": "private-pki-root-sign-example-root-2026-01"
+    }
+  },
+  {
+    "type": "aws:cloudwatch/eventTarget:EventTarget",
+    "name": "example-root-2026-01-sign-alert-eu-example-2-target",
+    "inputs": {
+      "arn": "arn:aws:sns:eu-example-2:111122223333:private-pki-root-sign-example-root-2026-01",
+      "rule": "private-pki-root-sign-example-root-2026-01",
+      "targetId": "private-pki-root-sign-example-root-2026-01"
+    }
+  },
+  {
+    "type": "aws:cloudwatch/metricAlarm:MetricAlarm",
+    "name": "example-root-2026-01-sign-alert-eu-example-1-alarm",
+    "inputs": {
+      "actionsEnabled": true,
+      "alarmActions": [
+        "arn:aws:sns:eu-example-1:111122223333:private-pki-root-sign-example-root-2026-01"
+      ],
+      "alarmDescription": "private PKI root example-root-2026-01 was used to sign in eu-example-1; every signature after the ceremony is an incident",
+      "comparisonOperator": "GreaterThanThreshold",
+      "dimensions": {
+        "RuleName": "private-pki-root-sign-example-root-2026-01"
+      },
+      "evaluationPeriods": 1,
+      "metricName": "TriggeredRules",
+      "name": "private-pki-root-sign-example-root-2026-01",
+      "namespace": "AWS/Events",
+      "period": 60,
+      "statistic": "Sum",
+      "tags": {
+        "scope": "sign-alert/example-root-2026-01"
+      },
+      "threshold": 0,
+      "treatMissingData": "notBreaching"
+    }
+  },
+  {
+    "type": "aws:cloudwatch/metricAlarm:MetricAlarm",
+    "name": "example-root-2026-01-sign-alert-eu-example-2-alarm",
+    "inputs": {
+      "actionsEnabled": true,
+      "alarmActions": [
+        "arn:aws:sns:eu-example-2:111122223333:private-pki-root-sign-example-root-2026-01"
+      ],
+      "alarmDescription": "private PKI root example-root-2026-01 was used to sign in eu-example-2; every signature after the ceremony is an incident",
+      "comparisonOperator": "GreaterThanThreshold",
+      "dimensions": {
+        "RuleName": "private-pki-root-sign-example-root-2026-01"
+      },
+      "evaluationPeriods": 1,
+      "metricName": "TriggeredRules",
+      "name": "private-pki-root-sign-example-root-2026-01",
+      "namespace": "AWS/Events",
+      "period": 60,
+      "statistic": "Sum",
+      "tags": {
+        "scope": "sign-alert/example-root-2026-01"
+      },
+      "threshold": 0,
+      "treatMissingData": "notBreaching"
+    }
+  },
+  {
+    "type": "aws:iam/role:Role",
+    "name": "private-pki-root-admin",
+    "inputs": {
+      "arn": "arn:aws:iam::111122223333:role/private-pki-root-admin",
+      "assumeRolePolicy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":\"arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_admin_*\"}},\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:root\"},\"Sid\":\"ApprovedSSOAdminAssumeRole\"}],\"Version\":\"2012-10-17\"}",
+      "description": "Administer protected private PKI root KMS keys; cannot sign or schedule deletion",
+      "maxSessionDuration": 3600,
+      "name": "private-pki-root-admin",
+      "permissionsBoundary": "arn:aws:iam::111122223333:policy/example-boundary",
+      "tags": {
+        "scope": "roles/"
+      }
+    }
+  },
+  {
+    "type": "aws:iam/role:Role",
+    "name": "private-pki-root-ceremony",
+    "inputs": {
+      "arn": "arn:aws:iam::111122223333:role/private-pki-root-ceremony",
+      "assumeRolePolicy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":\"arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_admin_*\"}},\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:root\"},\"Sid\":\"ApprovedSSOAdminAssumeRole\"}],\"Version\":\"2012-10-17\"}",
+      "description": "Read and sign with private PKI root KMS keys during an explicit ceremony",
+      "maxSessionDuration": 3600,
+      "name": "private-pki-root-ceremony",
+      "permissionsBoundary": "arn:aws:iam::111122223333:policy/example-boundary",
+      "tags": {
+        "scope": "roles/"
+      }
+    }
+  },
+  {
+    "type": "aws:kms/alias:Alias",
+    "name": "example-root-2026-01-alias",
+    "inputs": {
+      "name": "alias/private-pki/root/example-root-2026-01",
+      "targetKeyId": "mrk-primary"
+    }
+  },
+  {
+    "type": "aws:kms/alias:Alias",
+    "name": "example-root-2026-01-replica-alias",
+    "inputs": {
+      "name": "alias/private-pki/root/example-root-2026-01",
+      "targetKeyId": "mrk-primary"
+    }
+  },
+  {
+    "type": "aws:kms/key:Key",
+    "name": "example-root-2026-01",
+    "inputs": {
+      "arn": "arn:aws:kms:eu-example-1:111122223333:key/mrk-primary",
+      "customerMasterKeySpec": "ECC_NIST_P384",
+      "deletionWindowInDays": 30,
+      "description": "Private PKI root example-root-2026-01 (multi-region primary)",
+      "keyId": "mrk-primary",
+      "keyUsage": "SIGN_VERIFY",
+      "multiRegion": true,
+      "policy": "{\"Statement\":[{\"Action\":[\"kms:DescribeKey\",\"kms:GetKeyPolicy\",\"kms:PutKeyPolicy\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:root\"},\"Resource\":\"*\",\"Sid\":\"BreakGlassPolicyRecovery\"},{\"Action\":[\"kms:CancelKeyDeletion\",\"kms:CreateAlias\",\"kms:DeleteAlias\",\"kms:DescribeKey\",\"kms:DisableKey\",\"kms:EnableKey\",\"kms:GetKeyPolicy\",\"kms:GetKeyRotationStatus\",\"kms:ListKeyPolicies\",\"kms:ListResourceTags\",\"kms:ReplicateKey\",\"kms:TagResource\",\"kms:UntagResource\",\"kms:UpdateAlias\",\"kms:UpdateKeyDescription\",\"kms:UpdatePrimaryRegion\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:role/private-pki-root-admin\"},\"Resource\":\"*\",\"Sid\":\"KeyAdministrationWithoutSigningOrDeletion\"},{\"Action\":[\"kms:CancelKeyDeletion\",\"kms:CreateAlias\",\"kms:DeleteAlias\",\"kms:DescribeKey\",\"kms:DisableKey\",\"kms:EnableKey\",\"kms:GetKeyPolicy\",\"kms:GetKeyRotationStatus\",\"kms:ListKeyPolicies\",\"kms:ListResourceTags\",\"kms:ReplicateKey\",\"kms:TagResource\",\"kms:UntagResource\",\"kms:UpdateAlias\",\"kms:UpdateKeyDescription\",\"kms:UpdatePrimaryRegion\"],\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":\"arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_admin_*\"}},\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:root\"},\"Resource\":\"*\",\"Sid\":\"KeyAdministrationByApprovedSSOAdmin\"},{\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:role/private-pki-root-ceremony\"},\"Resource\":\"*\",\"Sid\":\"ExplicitRootCeremonyRead\"},{\"Action\":\"kms:Sign\",\"Condition\":{\"StringEquals\":{\"kms:SigningAlgorithm\":\"ECDSA_SHA_384\"}},\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:role/private-pki-root-ceremony\"},\"Resource\":\"*\",\"Sid\":\"ExplicitRootCeremonySign\"}],\"Version\":\"2012-10-17\"}",
+      "tags": {
+        "scope": "key/example-root-2026-01"
+      }
+    }
+  },
+  {
+    "type": "aws:kms/replicaKey:ReplicaKey",
+    "name": "example-root-2026-01-replica",
+    "inputs": {
+      "arn": "arn:aws:kms:eu-example-2:111122223333:key/mrk-primary",
+      "deletionWindowInDays": 30,
+      "description": "Private PKI root example-root-2026-01 (DR replica)",
+      "keyId": "mrk-primary",
+      "policy": "{\"Statement\":[{\"Action\":[\"kms:DescribeKey\",\"kms:GetKeyPolicy\",\"kms:PutKeyPolicy\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:root\"},\"Resource\":\"*\",\"Sid\":\"BreakGlassPolicyRecovery\"},{\"Action\":[\"kms:CancelKeyDeletion\",\"kms:CreateAlias\",\"kms:DeleteAlias\",\"kms:DescribeKey\",\"kms:DisableKey\",\"kms:EnableKey\",\"kms:GetKeyPolicy\",\"kms:GetKeyRotationStatus\",\"kms:ListKeyPolicies\",\"kms:ListResourceTags\",\"kms:ReplicateKey\",\"kms:TagResource\",\"kms:UntagResource\",\"kms:UpdateAlias\",\"kms:UpdateKeyDescription\",\"kms:UpdatePrimaryRegion\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:role/private-pki-root-admin\"},\"Resource\":\"*\",\"Sid\":\"KeyAdministrationWithoutSigningOrDeletion\"},{\"Action\":[\"kms:CancelKeyDeletion\",\"kms:CreateAlias\",\"kms:DeleteAlias\",\"kms:DescribeKey\",\"kms:DisableKey\",\"kms:EnableKey\",\"kms:GetKeyPolicy\",\"kms:GetKeyRotationStatus\",\"kms:ListKeyPolicies\",\"kms:ListResourceTags\",\"kms:ReplicateKey\",\"kms:TagResource\",\"kms:UntagResource\",\"kms:UpdateAlias\",\"kms:UpdateKeyDescription\",\"kms:UpdatePrimaryRegion\"],\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":\"arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_admin_*\"}},\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:root\"},\"Resource\":\"*\",\"Sid\":\"KeyAdministrationByApprovedSSOAdmin\"},{\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:role/private-pki-root-ceremony\"},\"Resource\":\"*\",\"Sid\":\"ExplicitRootCeremonyRead\"},{\"Action\":\"kms:Sign\",\"Condition\":{\"StringEquals\":{\"kms:SigningAlgorithm\":\"ECDSA_SHA_384\"}},\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:role/private-pki-root-ceremony\"},\"Resource\":\"*\",\"Sid\":\"ExplicitRootCeremonySign\"}],\"Version\":\"2012-10-17\"}",
+      "primaryKeyArn": "arn:aws:kms:eu-example-1:111122223333:key/mrk-primary",
+      "tags": {
+        "scope": "key/example-root-2026-01"
+      }
+    }
+  },
+  {
+    "type": "aws:sns/topic:Topic",
+    "name": "example-root-2026-01-sign-alert-eu-example-1-topic",
+    "inputs": {
+      "arn": "arn:aws:sns:eu-example-1:111122223333:private-pki-root-sign-example-root-2026-01",
+      "displayName": "private PKI root signature",
+      "name": "private-pki-root-sign-example-root-2026-01",
+      "tags": {
+        "scope": "sign-alert/example-root-2026-01"
+      }
+    }
+  },
+  {
+    "type": "aws:sns/topic:Topic",
+    "name": "example-root-2026-01-sign-alert-eu-example-2-topic",
+    "inputs": {
+      "arn": "arn:aws:sns:eu-example-2:111122223333:private-pki-root-sign-example-root-2026-01",
+      "displayName": "private PKI root signature",
+      "name": "private-pki-root-sign-example-root-2026-01",
+      "tags": {
+        "scope": "sign-alert/example-root-2026-01"
+      }
+    }
+  },
+  {
+    "type": "aws:sns/topicPolicy:TopicPolicy",
+    "name": "example-root-2026-01-sign-alert-eu-example-1-topic-policy",
+    "inputs": {
+      "arn": "arn:aws:sns:eu-example-1:111122223333:private-pki-root-sign-example-root-2026-01",
+      "policy": "{\"Statement\":[{\"Action\":[\"sns:AddPermission\",\"sns:DeleteTopic\",\"sns:GetTopicAttributes\",\"sns:ListSubscriptionsByTopic\",\"sns:Publish\",\"sns:RemovePermission\",\"sns:SetTopicAttributes\",\"sns:Subscribe\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:root\"},\"Resource\":\"arn:aws:sns:eu-example-1:111122223333:private-pki-root-sign-example-root-2026-01\",\"Sid\":\"OwnerAccountTopicAdministration\"},{\"Action\":\"sns:Publish\",\"Condition\":{\"StringEquals\":{\"aws:SourceAccount\":\"111122223333\"}},\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"events.amazonaws.com\"},\"Resource\":\"arn:aws:sns:eu-example-1:111122223333:private-pki-root-sign-example-root-2026-01\",\"Sid\":\"AllowEventBridgePublish\"},{\"Action\":\"sns:Publish\",\"Condition\":{\"StringEquals\":{\"aws:SourceAccount\":\"111122223333\"}},\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"cloudwatch.amazonaws.com\"},\"Resource\":\"arn:aws:sns:eu-example-1:111122223333:private-pki-root-sign-example-root-2026-01\",\"Sid\":\"AllowCloudWatchAlarmPublish\"}],\"Version\":\"2012-10-17\"}"
+    }
+  },
+  {
+    "type": "aws:sns/topicPolicy:TopicPolicy",
+    "name": "example-root-2026-01-sign-alert-eu-example-2-topic-policy",
+    "inputs": {
+      "arn": "arn:aws:sns:eu-example-2:111122223333:private-pki-root-sign-example-root-2026-01",
+      "policy": "{\"Statement\":[{\"Action\":[\"sns:AddPermission\",\"sns:DeleteTopic\",\"sns:GetTopicAttributes\",\"sns:ListSubscriptionsByTopic\",\"sns:Publish\",\"sns:RemovePermission\",\"sns:SetTopicAttributes\",\"sns:Subscribe\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111122223333:root\"},\"Resource\":\"arn:aws:sns:eu-example-2:111122223333:private-pki-root-sign-example-root-2026-01\",\"Sid\":\"OwnerAccountTopicAdministration\"},{\"Action\":\"sns:Publish\",\"Condition\":{\"StringEquals\":{\"aws:SourceAccount\":\"111122223333\"}},\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"events.amazonaws.com\"},\"Resource\":\"arn:aws:sns:eu-example-2:111122223333:private-pki-root-sign-example-root-2026-01\",\"Sid\":\"AllowEventBridgePublish\"},{\"Action\":\"sns:Publish\",\"Condition\":{\"StringEquals\":{\"aws:SourceAccount\":\"111122223333\"}},\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"cloudwatch.amazonaws.com\"},\"Resource\":\"arn:aws:sns:eu-example-2:111122223333:private-pki-root-sign-example-root-2026-01\",\"Sid\":\"AllowCloudWatchAlarmPublish\"}],\"Version\":\"2012-10-17\"}"
+    }
+  },
+  {
+    "type": "aws:sns/topicSubscription:TopicSubscription",
+    "name": "example-root-2026-01-sign-alert-eu-example-1-subscription-platform-at-example-com",
+    "inputs": {
+      "endpoint": "platform@example.com",
+      "protocol": "email",
+      "topic": "arn:aws:sns:eu-example-1:111122223333:private-pki-root-sign-example-root-2026-01"
+    }
+  },
+  {
+    "type": "aws:sns/topicSubscription:TopicSubscription",
+    "name": "example-root-2026-01-sign-alert-eu-example-1-subscription-security-at-example-com",
+    "inputs": {
+      "endpoint": "security@example.com",
+      "protocol": "email",
+      "topic": "arn:aws:sns:eu-example-1:111122223333:private-pki-root-sign-example-root-2026-01"
+    }
+  },
+  {
+    "type": "aws:sns/topicSubscription:TopicSubscription",
+    "name": "example-root-2026-01-sign-alert-eu-example-2-subscription-platform-at-example-com",
+    "inputs": {
+      "endpoint": "platform@example.com",
+      "protocol": "email",
+      "topic": "arn:aws:sns:eu-example-2:111122223333:private-pki-root-sign-example-root-2026-01"
+    }
+  },
+  {
+    "type": "aws:sns/topicSubscription:TopicSubscription",
+    "name": "example-root-2026-01-sign-alert-eu-example-2-subscription-security-at-example-com",
+    "inputs": {
+      "endpoint": "security@example.com",
+      "protocol": "email",
+      "topic": "arn:aws:sns:eu-example-2:111122223333:private-pki-root-sign-example-root-2026-01"
+    }
+  },
+  {
+    "type": "pulumi:providers:aws",
+    "name": "provider/aws/example-root-2026-01-primary",
+    "inputs": {
+      "allowedAccountIds": [
+        "111122223333"
+      ],
+      "profile": "example-custody",
+      "region": "eu-example-1",
+      "skipCredentialsValidation": false,
+      "skipRegionValidation": true
+    }
+  },
+  {
+    "type": "pulumi:providers:aws",
+    "name": "provider/aws/example-root-2026-01-replica",
+    "inputs": {
+      "allowedAccountIds": [
+        "111122223333"
+      ],
+      "profile": "example-custody",
+      "region": "eu-example-2",
+      "skipCredentialsValidation": false,
+      "skipRegionValidation": true
+    }
+  },
+  {
+    "type": "pulumi:providers:aws",
+    "name": "provider/aws/private-pki-root-primary",
+    "inputs": {
+      "allowedAccountIds": [
+        "111122223333"
+      ],
+      "profile": "example-custody",
+      "region": "eu-example-1",
+      "skipCredentialsValidation": false,
+      "skipRegionValidation": true
+    }
+  }
+]
