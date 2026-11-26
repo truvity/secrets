@@ -9,6 +9,8 @@ from v0.2.0 on the Go module and `openbaoctl` with them.
 
 ### Added
 
+- **`pkg/custody`: opt-in `StrictRoot`.** Strict key rules for a root a whole PKI hangs from: region-pinned replication, digest-only signing, a 30-day deletion window in the key policy, and alerts on destructive and policy changes. Documents without it are unchanged.
+
 - **`pkg/pki`: several active root generations, one per party.** `Validate` requires at least one active generation instead of exactly one, and each trust domain (DNS or URI) derives under the generation its `rootGeneration` names, which must be active: its intermediate's and root-signed environment CAs' artifacts, and its issuing CAs' organization, are that root's. An empty `rootGeneration` is the one active generation (`Validate` fills it in); with several active it is required. New: `Contract.ActiveGenerations`, `Contract.TrustDomainRoot(domain)`, `Contract.DeclaresUnder(generation)`, `Contract.CustodyAccounts`, `Contract.GenerationsInAccount(account)`. `EmergencyServerSpec` signs, per root, only for a require-trusted domain declared under that root. A contract with one active root derives what it did (every golden is unchanged). [ADR 0007](docs/decisions/0007-several-active-roots.md).
 
 - **Custody outputs per account.** A custody outputs file speaks for its roles' account. `VerifyCustody` and `VerifyCustodyOutputs` bind the generations the contract authors in that account, and a ceremony for a generation whose custody is in another account is refused by name (pass that account's file). With one custody account nothing changes. Adoption for a second root: one `pkg/custody` per account, each one's outputs synced, and `--custody-outputs` names the file of the generation's account.
