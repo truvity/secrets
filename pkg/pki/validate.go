@@ -22,6 +22,12 @@ type generationInfo struct {
 // generation-reference, alert, and migration-policy invariants. Load calls
 // it; a Contract built any other way (a test fixture, a generated one)
 // should call it explicitly before any other method trusts it.
+//
+// It also fills IN PLACE a trust domain's empty rootGeneration with the one
+// active generation (and refuses an empty one when several are active).
+// A domain may name a preparing or retiring generation and still validate:
+// a rotation declares a domain under its next root before that root is
+// active. Deriving it is refused until the root is active.
 func (c *Contract) Validate() error {
 	if c.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("pki: schemaVersion must be %d, got %d", SchemaVersion, c.SchemaVersion)
@@ -133,7 +139,7 @@ func (c *Contract) Validate() error {
 		}
 	}
 
-	return nil
+	return c.activeRootsTrusted()
 }
 
 func (c *Contract) hasTrustDomains() bool {
@@ -231,10 +237,25 @@ func validateGenerations(generations []RootGeneration, needDR bool) (map[string]
 	return infos, nil
 }
 
-// defaultRootGenerations fills a trust domain's empty rootGeneration with
-// the contract's one active generation, and refuses an empty one when
-// several are active: which root signs a domain is then the author's
-// choice, never the order of a list.
+// activeRootsTrusted refuses an active generation that some trust domain is
+// declared under but migration.trustedGenerations omits: its leaves would
+// be issued before anything that verifies them trusts their root.
+func (c *Contract) activeRootsTrusted() error {
+	for _, generation := range c.ActiveGenerations() {
+		if c.DeclaresUnder(generation.ID) && !slices.Contains(c.Migration.TrustedGenerations, generation.ID) {
+			return fmt.Errorf(
+				"pki: root generation %q is active and has trust domains below it, but migration.trustedGenerations omits it: trust a root before it issues",
+				generation.ID)
+		}
+	}
+
+	return nil
+}
+
+// defaultRootGenerations fills IN PLACE a trust domain's empty
+// rootGeneration with the contract's one active generation, and refuses an
+// empty one when several are active: which root signs a domain is then the
+// author's choice, never the order of a list.
 func (c *Contract) defaultRootGenerations() error {
 	active := c.ActiveGenerations()
 

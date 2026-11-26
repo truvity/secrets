@@ -65,6 +65,8 @@ func TestVerifyCustodyOutputs(t *testing.T) {
 	extra := validOutputs()
 	other := extra.Generations["example-root-2026-01"]
 	other.Alias = custody.DefaultAliasPrefix + "other"
+	other.PrimaryKeyARN = strings.Replace(testKey, "mrk-example", "mrk-other", 1)
+	other.ReplicaKeyARN = strings.Replace(testReplica, "mrk-example", "mrk-other", 1)
 	extra.Generations["other"] = other
 	require.ErrorContains(t, validContract().VerifyCustodyOutputs(extra), "does not author")
 
@@ -104,6 +106,8 @@ func TestVerifyCustodyRefusals(t *testing.T) {
 		{"outputs generation count differs", func(o *CustodyOutputs, _ *CustodyRequest, _ *Contract) {
 			surplus := o.Generations["example-root-2026-01"]
 			surplus.Alias = custody.DefaultAliasPrefix + "surplus"
+			surplus.PrimaryKeyARN = strings.Replace(testKey, "mrk-example", "mrk-surplus", 1)
+			surplus.ReplicaKeyARN = strings.Replace(testReplica, "mrk-example", "mrk-surplus", 1)
 			o.Generations["surplus"] = surplus
 		}, "which the contract does not author", false},
 		{"alias of another generation", func(o *CustodyOutputs, _ *CustodyRequest, _ *Contract) {
