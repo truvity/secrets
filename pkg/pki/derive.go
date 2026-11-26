@@ -531,6 +531,13 @@ func (c *Contract) dnsIssuingAuthority(domain *DNSTrustDomain, generation *RootG
 		// pattern is when the contract is validated.
 		if authored.Names.Source == NameSourceCatalog {
 			for _, name := range names {
+				// A name that is no DNS name (a trailing dot or blank, a bare
+				// "*") would compare unequal to every fence below.
+				if !isDNSName(strings.TrimPrefix(name, "*.")) {
+					return Authority{}, fmt.Errorf("pki: %s %s role %s: catalog name %q is not a lower-case DNS name (a leading \"*.\" aside)",
+						environment.Name, domain.Name, authored.Name, name)
+				}
+
 				if other, theirs, nests := c.TrustDomains.otherDomainName(domain.Name, name); nests {
 					return Authority{}, fmt.Errorf("pki: %s %s role %s: catalog name %q nests with trust domain %s's %q: a role signs no name of another dns domain",
 						environment.Name, domain.Name, authored.Name, name, other, theirs)
