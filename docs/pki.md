@@ -483,8 +483,14 @@ that is not a lower-case DNS name, is not its domain's suffix or under it,
 or falls outside the intermediate's name constraint. In a name-constrained
 domain it also refuses a zone equal to the whole suffix, two environments
 with one zone, and one zone under another's: their issuing CAs would
-overlap. `Validate` refuses two DNS domains whose suffixes or constraint
-entries are equal or nested.
+overlap, and a zone that nests with a constraint entry beside the suffix.
+`Validate` requires each suffix to be a lower-case DNS name and each
+constraint entry beside it to lie outside it. It refuses two DNS domains
+whose suffixes or constraint entries are equal or nested, and a `static`
+pattern that is equal to, under or above another DNS domain's suffix or
+entry; the derivation refuses a `catalog` name the same way, with a leading
+`*.` dropped. A role's names need not sit under its own suffix: an
+unconstrained domain's roles are its only fence.
 
 `DeriveWith` takes `DeriveOptions` as well. `PendingDomains` names the DNS
 domains whose intermediate the root has not signed yet. Such a domain

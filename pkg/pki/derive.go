@@ -324,10 +324,13 @@ func checkZone(domain *DNSTrustDomain, environment, zone string) error {
 
 // zonesApart refuses, in a name-constrained domain, environments whose
 // issuing CAs would overlap: a zone equal to the suffix (that CA could sign
-// every other environment's names), two environments with one zone, or one
-// zone under another. An unconstrained domain has no such boundary to keep.
+// every other environment's names), a zone that nests with a constraint
+// entry beside the suffix (every environment's CA carries those entries),
+// two environments with one zone, or one zone under another. An
+// unconstrained domain has no such boundary to keep.
 func zonesApart(domain *DNSTrustDomain, zones []environmentZone) error {
-	if len(domain.DomainIntermediate.PermittedDNSDomains) == 0 {
+	permitted := domain.DomainIntermediate.PermittedDNSDomains
+	if len(permitted) == 0 {
 		return nil
 	}
 
@@ -335,6 +338,13 @@ func zonesApart(domain *DNSTrustDomain, zones []environmentZone) error {
 		if strings.EqualFold(a.zone, domain.Suffix) {
 			return fmt.Errorf("pki: environment %s: zone %q of trust domain %s is the domain's whole suffix; "+
 				"in a name-constrained domain each environment's zone is below it", a.environment, a.zone, domain.Name)
+		}
+
+		for _, entry := range permitted {
+			if !strings.EqualFold(entry, domain.Suffix) && namesNest(a.zone, entry) {
+				return fmt.Errorf("pki: environment %s: zone %q of trust domain %s nests with its constraint entry %q, which every environment's issuing CA carries",
+					a.environment, a.zone, domain.Name, entry)
+			}
 		}
 	}
 
@@ -516,6 +526,18 @@ func (c *Contract) dnsIssuingAuthority(domain *DNSTrustDomain, generation *RootG
 				environment.Name, domain.Name, authored.Name)
 		}
 
+		// A catalog is the caller's list, never authored: each name is
+		// fenced off another DNS domain's names here, as an authored static
+		// pattern is when the contract is validated.
+		if authored.Names.Source == NameSourceCatalog {
+			for _, name := range names {
+				if other, theirs, nests := c.TrustDomains.otherDomainName(domain.Name, name); nests {
+					return Authority{}, fmt.Errorf("pki: %s %s role %s: catalog name %q nests with trust domain %s's %q: a role signs no name of another dns domain",
+						environment.Name, domain.Name, authored.Name, name, other, theirs)
+				}
+			}
+		}
+
 		roles = append(roles, model.PKIRole{
 			Name:             authored.Name,
 			Issuer:           issuer,
@@ -671,7 +693,7 @@ func issuingPermittedDomains(domain *DNSTrustDomain, zone string) []string {
 	permitted := []string{zone}
 
 	for _, constraint := range domain.DomainIntermediate.PermittedDNSDomains {
-		if constraint == domain.Suffix || slices.Contains(permitted, constraint) {
+		if strings.EqualFold(constraint, domain.Suffix) || slices.Contains(permitted, constraint) {
 			continue
 		}
 

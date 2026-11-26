@@ -440,3 +440,198 @@ func TestPendingDomainRefusals(t *testing.T) {
 		})
 	}
 }
+
+func wantValidateError(t *testing.T, contract *Contract, substring string) {
+	t.Helper()
+
+	err := contract.Validate()
+	if err == nil || !strings.Contains(err.Error(), substring) {
+		t.Errorf("Validate() = %v, want an error containing %q", err, substring)
+	}
+}
+
+// A suffix is a lower-case DNS name, and a constraint entry beside it lies
+// outside it, so the issuing CAs, which all carry those entries, cannot
+// reach into each other's zones.
+func TestDNSDomainSuffixAndConstraintRefusals(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mutate func(*DNSTrustDomain)
+		want   string
+	}{
+		"an entry above the suffix": {func(d *DNSTrustDomain) {
+			d.DomainIntermediate.PermittedDNSDomains = []string{"vendor-a.example", "example"}
+		}, `permittedDnsDomains[1] "example" nests with the domain's suffix "vendor-a.example"`},
+		"an entry under the suffix": {func(d *DNSTrustDomain) {
+			d.DomainIntermediate.PermittedDNSDomains = []string{"vendor-a.example", "dev.vendor-a.example"}
+		}, `permittedDnsDomains[1] "dev.vendor-a.example" nests with the domain's suffix`},
+		"a suffix in mixed case": {func(d *DNSTrustDomain) {
+			d.Suffix = "Vendor-A.Example"
+		}, `suffix "Vendor-A.Example" is not a lower-case DNS name`},
+		"an unconstrained suffix with a space": {func(d *DNSTrustDomain) {
+			d.Suffix = " example.private"
+			d.DomainIntermediate.PermittedDNSDomains = nil
+		}, `suffix " example.private" is not a lower-case DNS name`},
+		"an unconstrained suffix with an empty label": {func(d *DNSTrustDomain) {
+			d.Suffix = "example..private"
+			d.DomainIntermediate.PermittedDNSDomains = nil
+		}, `suffix "example..private" is not a lower-case DNS name`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			contract := withVendorDomain(t)
+			tc.mutate(contract.DNSTrustDomain("vendor-a"))
+			wantValidateError(t, contract, tc.want)
+		})
+	}
+}
+
+// A constraint entry beside the suffix, other than the suffix, stays on
+// every issuing CA; the suffix itself is dropped whatever its case.
+func TestIssuingConstraintDropsTheSuffixInAnyCase(t *testing.T) {
+	contract := withVendorDomain(t, "dev")
+	contract.DNSTrustDomain("vendor-a").Suffix = "Vendor-A.Example"
+
+	derivation, err := contract.Derive(vendorEnvironments())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dev := issuingByKey(derivation)[issuingKey{"dev", "vendor-a"}]
+	if !slices.Equal(dev.PermittedDNSDomains, []string{"dev.vendor-a.example"}) {
+		t.Errorf("dev vendor-a is constrained to %v, want its zone alone", dev.PermittedDNSDomains)
+	}
+}
+
+// A zone that nests with a constraint entry beside the suffix is refused,
+// either way round, even where the contract was not validated.
+func TestZoneNestingWithAConstraintEntryIsRefused(t *testing.T) {
+	for name, entry := range map[string]string{
+		"the zone itself": "dev.vendor-a.example",
+		"under the zone":  "eu.dev.vendor-a.example",
+		"above the zone":  "vendor-a.example.zz",
+	} {
+		t.Run(name, func(t *testing.T) {
+			contract := withVendorDomain(t)
+			domain := contract.DNSTrustDomain("vendor-a")
+			domain.DomainIntermediate.PermittedDNSDomains = []string{"vendor-a.example", entry}
+
+			environments := vendorEnvironments()
+			if name == "above the zone" {
+				environments[0].Zones["vendor-a"] = "dev.vendor-a.example.zz"
+				domain.Suffix = "example.zz"
+				domain.DomainIntermediate.PermittedDNSDomains = []string{"example.zz", entry}
+				environments[1].Zones["vendor-a"] = "prod.example.zz"
+			}
+
+			wantDeriveError(t, contract, environments, DeriveOptions{}, "nests with its constraint entry")
+		})
+	}
+}
+
+// No role of one DNS domain signs a name of another: a static pattern is
+// refused when the contract is validated, a catalog name when it derives.
+// An unconstrained domain's names need not sit under its own suffix.
+func TestRolesSignNoNameOfAnotherDomain(t *testing.T) {
+	static := func(pattern string) func(*Contract) {
+		return func(c *Contract) {
+			origin := c.DNSTrustDomain("origin")
+			role := origin.Roles[0]
+			role.Name = "static"
+			role.Names = NameShape{Source: NameSourceStatic, Patterns: []string{pattern}, Bare: true}
+			role.AllowWildcard = false
+			origin.Roles = append(origin.Roles, role)
+		}
+	}
+
+	for name, tc := range map[string]struct {
+		mutate func(*Contract)
+		want   string
+	}{
+		"a static pattern under another's suffix": {static("api.example.private"),
+			`roles[static] pattern "api.example.private" nests with trust domain private's "example.private"`},
+		"a static pattern above another's suffix": {static("private"),
+			`roles[static] pattern "private" nests with trust domain private's "example.private"`},
+		"a static pattern under another's constraint": {static("svc.cluster.local"),
+			`nests with trust domain private's "cluster.local"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			contract := withVendorDomain(t)
+			tc.mutate(contract)
+			wantValidateError(t, contract, tc.want)
+		})
+	}
+
+	contract := withVendorDomain(t)
+	static("app.example.org")(contract)
+
+	if err := contract.Validate(); err != nil {
+		t.Errorf("a static pattern in another public zone is refused: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		catalog string
+		want    string
+	}{
+		"a catalog name under another's suffix": {"app.dev.example.private",
+			`catalog name "app.dev.example.private" nests with trust domain private's "example.private"`},
+		"a wildcard above another's suffix": {"*.private",
+			`catalog name "*.private" nests with trust domain private's "example.private"`},
+		"a wildcard under another domain": {"*.dev.vendor-a.example",
+			`nests with trust domain vendor-a's "vendor-a.example"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			environments := vendorEnvironments()
+			key := CatalogKey("origin", "origin")
+			environments[0].Catalog[key] = append(environments[0].Catalog[key], tc.catalog)
+
+			wantDeriveError(t, withVendorDomain(t), environments, DeriveOptions{}, tc.want)
+		})
+	}
+
+	environments := vendorEnvironments()
+	key := CatalogKey("origin", "origin")
+	environments[0].Catalog[key] = append(environments[0].Catalog[key], "app.example.org", "*.example.com")
+
+	if _, err := withVendorDomain(t).Derive(environments); err != nil {
+		t.Errorf("catalog names in other public zones are refused: %v", err)
+	}
+}
+
+// Nesting is refused whichever of two domains, or two zones, is the outer.
+func TestNestingIsRefusedEitherWayRound(t *testing.T) {
+	contract := withVendorDomain(t)
+	vendor := contract.DNSTrustDomain("vendor-a")
+	vendor.Suffix = "private"
+	vendor.DomainIntermediate.PermittedDNSDomains = []string{"private"}
+	wantValidateError(t, contract, `trust domains private and vendor-a overlap: "example.private" and "private"`)
+
+	environments := vendorEnvironments()
+	environments[0].Zones["vendor-a"] = "eu.prod.vendor-a.example"
+	wantDeriveError(t, withVendorDomain(t), environments, DeriveOptions{}, "of trust domain vendor-a nest")
+}
+
+// The zones compared across environments are the ones the derivation used,
+// blanks trimmed.
+func TestZonesAreComparedTrimmed(t *testing.T) {
+	environments := vendorEnvironments()
+	environments[1].Zones["vendor-a"] = " dev.vendor-a.example"
+	wantDeriveError(t, withVendorDomain(t), environments, DeriveOptions{}, `environments dev and prod share zone "dev.vendor-a.example"`)
+}
+
+func TestPendingDomainSharingAURIDomainMountIsRefused(t *testing.T) {
+	contract := withVendorDomain(t)
+	identity := contract.URITrustDomain("identity")
+	identity.DomainIntermediate.Name = "example-identity-shared"
+	identity.Placement.DomainMount = "pki-vendor-a"
+	contract.DNSTrustDomain("vendor-a").Placement.DomainMount = "pki-vendor-a"
+
+	wantDeriveError(t, contract, vendorEnvironments(), DeriveOptions{PendingDomains: []string{"vendor-a"}},
+		"pending domain vendor-a shares its domain mount pki-vendor-a with identity")
+}
+
+func TestPendingDomainBelowAnotherGenerationIsRefused(t *testing.T) {
+	contract := withVendorDomain(t)
+	contract.DNSTrustDomain("vendor-a").RootGeneration = "example-root-2027-01"
+
+	wantDeriveError(t, contract, estateEnvironments(), DeriveOptions{PendingDomains: []string{"vendor-a"}},
+		`trust domain vendor-a is declared below root generation "example-root-2027-01"`)
+}

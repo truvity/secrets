@@ -41,14 +41,26 @@ mistake in the inputs, not a default. The private domain reaches every
 cluster, because the identity domain and the restore check rest on its
 zone. The origin zone is needed only where the origin domain reaches.
 
-**Separation.** The derivation refuses three things:
+**Separation.** A suffix is a lower-case DNS name, and a constraint entry
+beside the suffix lies outside it: every environment's issuing CA carries
+those entries, so one under the suffix would reach into other environments'
+zones. The derivation refuses:
 - a zone that is not a lower-case DNS name, is not its domain's suffix or
   under it, or falls outside the intermediate's name constraint;
-- in a name-constrained domain, a zone equal to the whole suffix, two
-  environments with one zone, and one zone under another's, since the
-  issuing CAs would then overlap;
+- in a name-constrained domain, a zone equal to the whole suffix, a zone
+  that nests with a constraint entry beside the suffix, two environments
+  with one zone, and one zone under another's;
 - two DNS domains whose suffixes or name-constraint entries are equal or
-  nested.
+  nested;
+- a role that would sign another DNS domain's names: a `static` pattern
+  (refused when the contract is validated) or a `catalog` name with a
+  leading `*.` dropped (refused when it derives), equal to, under or above
+  another domain's suffix or constraint entry.
+
+A role's names need not sit under its own suffix, because an unconstrained
+domain (an origin domain, say) publishes names in several zones. Its chain
+carries no constraint at all, so these checks on its roles are its only
+fence.
 
 **Pending.** A DNS domain whose artifact is not committed yet is pending
 (`pki.DeriveOptions.PendingDomains`, `estate.PKI.PendingDomains`). It
@@ -77,14 +89,17 @@ to sign.
 - A pending domain needs a domain mount of its own: a shared mount's default
   issuer, URLs and CRL belong to whichever domain is authored first, and
   signing a pending one would move them. The private and origin domains are
-  never pending.
+  never pending. A domain whose artifact is committed is refused as pending:
+  listing it would drop its issuing CAs, roles and logins, and a stack that
+  holds the grants would delete them.
 - The pending mount and request are selectable with `Options.Select` like
   any other resource, as one unit (ADR 0005). Moving a domain from pending
   to signed is one change: drop it from the pending list in the change that
   commits its artifact.
-- A domain or a URI domain that lists an environment the estate has no
-  cluster or namespace for is refused, so a typo cannot silently reach
-  nothing.
+- A DNS domain that lists an environment the estate has no cluster or
+  namespace for is refused, so a typo cannot silently reach nothing. A URI
+  domain's list is left as it was: it may name environments a partial
+  estate does not build.
 
 ## Alternatives considered
 

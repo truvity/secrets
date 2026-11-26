@@ -97,6 +97,20 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 		}
 	}
 
+	// Two trust domains' requests under one output would hide one of them
+	// from the ceremony.
+	outputs := map[string]string{}
+
+	for domain, output := range opts.DomainCSROutputs {
+		if other, taken := outputs[output]; taken {
+			first, second := min(domain, other), max(domain, other)
+
+			return fmt.Errorf("stack: trust domains %s and %s share the request output %q", first, second, output)
+		}
+
+		outputs[output] = domain
+	}
+
 	// Which pending domain intermediates this stack bootstraps, decided the
 	// same way, before anything is registered.
 	pendingDomains := map[string]bool{}
