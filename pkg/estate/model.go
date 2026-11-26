@@ -171,31 +171,36 @@ func (d *Desired) vendorDoors(out *model.Desired) error {
 
 // doorRules are what a party's own stack does in one PKI mount, and no
 // more: generate a key that never leaves the mount and its request, import
-// the signed certificate, name the issuer and the key, configure the
-// mount, and manage the roles; on the intermediate's mount also sign the
-// party's issuing CAs. Never issue or sign a leaf (cert-manager has its own
-// login for that), never generate or import an exportable key.
+// the signed certificate, name the issuer and the key, write the four
+// configurations the apply manages, and manage the roles; on the
+// intermediate's mount also sign the party's issuing CAs. Every path is
+// exact or ends in `+` (one segment): an `issuer/*` would also reach
+// `issuer/<ref>/issue/<role>` and `issuer/<ref>/sign-intermediate`, and a
+// `config/*` would reach `config/ca`, a key import. Never a leaf (cert-manager
+// has its own login), never an exportable or imported key, never `sys/`.
 //
 // prefix is the child namespace the mount is in, relative to the policy's
 // own ("" for its own namespace).
 func doorRules(prefix, mount string, intermediate bool) []model.Rule {
 	mount = prefix + mount
-
 	write := []string{model.CapCreate, model.CapUpdate}
-	read := []string{model.CapRead, model.CapList}
-	manage := []string{model.CapCreate, model.CapRead, model.CapUpdate, model.CapDelete, model.CapList}
+	readUpdate := []string{model.CapRead, model.CapUpdate}
+	list := []string{model.CapRead, model.CapList}
 
 	rules := []model.Rule{
 		{Path: mount + "/intermediate/generate/internal", Capabilities: write},
 		{Path: mount + "/intermediate/set-signed", Capabilities: write},
-		{Path: mount + "/issuer/*", Capabilities: []string{model.CapRead, model.CapUpdate}},
-		{Path: mount + "/issuers", Capabilities: read},
-		{Path: mount + "/key/*", Capabilities: []string{model.CapRead, model.CapUpdate}},
-		{Path: mount + "/keys", Capabilities: read},
-		{Path: mount + "/config/*", Capabilities: []string{model.CapRead, model.CapUpdate}},
-		{Path: mount + "/roles/*", Capabilities: manage},
-		{Path: mount + "/roles", Capabilities: read},
-		{Path: mount + "/cert/*", Capabilities: read},
+		{Path: mount + "/issuer/+", Capabilities: readUpdate},
+		{Path: mount + "/issuers", Capabilities: list},
+		{Path: mount + "/key/+", Capabilities: readUpdate},
+		{Path: mount + "/keys", Capabilities: list},
+		{Path: mount + "/config/issuers", Capabilities: readUpdate},
+		{Path: mount + "/config/urls", Capabilities: readUpdate},
+		{Path: mount + "/config/crl", Capabilities: readUpdate},
+		{Path: mount + "/config/auto-tidy", Capabilities: readUpdate},
+		{Path: mount + "/roles/+", Capabilities: []string{model.CapCreate, model.CapRead, model.CapUpdate, model.CapDelete}},
+		{Path: mount + "/roles", Capabilities: list},
+		{Path: mount + "/cert/+", Capabilities: []string{model.CapRead}},
 	}
 
 	if intermediate {
