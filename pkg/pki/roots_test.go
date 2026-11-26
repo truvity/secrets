@@ -268,37 +268,37 @@ func TestEmergencyServerSpecIsPerRoot(t *testing.T) {
 }
 
 func TestAKeyIsOneGenerationsOnly(t *testing.T) {
-	cases := map[string]func(*CustodyOutputs){
-		// The same multi-region key, its replica in another region.
-		"repeated primary key": func(o *CustodyOutputs) {
-			second := o.Generations["example-root-2026-01"]
-			second.Alias = custody.DefaultAliasPrefix + "example-root-2027-01"
-			second.ReplicaRegion = "eu-west-1"
-			second.ReplicaKeyARN = strings.Replace(testReplica, "eu-north-1", "eu-west-1", 1)
-			o.Generations["example-root-2027-01"] = second
-		},
-		// The same multi-region key, its primary in another region.
-		"repeated replica key": func(o *CustodyOutputs) {
-			second := o.Generations["example-root-2026-01"]
-			second.Alias = custody.DefaultAliasPrefix + "example-root-2027-01"
-			second.PrimaryRegion = "eu-west-3"
-			second.PrimaryKeyARN = strings.Replace(testKey, "eu-central-1", "eu-west-3", 1)
-			o.Generations["example-root-2027-01"] = second
-		},
+	// Each case gives a second generation the first one's multi-region key
+	// (mrk-example), published from other regions.
+	cases := map[string]struct{ primary, replica string }{
+		"repeated primary key":            {"eu-central-1", "eu-west-1"},
+		"repeated replica key":            {"eu-west-3", "eu-north-1"},
+		"the same key from other regions": {"eu-west-3", "eu-west-1"},
 	}
 
-	want := map[string]string{
-		"repeated primary key": `generation "example-root-2027-01": primaryKeyArn ` + testKey + ` is also generation "example-root-2026-01"'s`,
-		"repeated replica key": `generation "example-root-2027-01": replicaKeyArn ` + testReplica + ` is also generation "example-root-2026-01"'s`,
-	}
-
-	for name, mutate := range cases {
+	for name, regions := range cases {
 		t.Run(name, func(t *testing.T) {
 			outputs := validOutputs()
-			mutate(outputs)
-			require.ErrorContains(t, outputs.Validate(), want[name])
+			second := outputs.Generations["example-root-2026-01"]
+			second.Alias = custody.DefaultAliasPrefix + "example-root-2027-01"
+			second.PrimaryRegion, second.ReplicaRegion = regions.primary, regions.replica
+			second.PrimaryKeyARN = strings.Replace(testKey, "eu-central-1", regions.primary, 1)
+			second.ReplicaKeyARN = strings.Replace(testReplica, "eu-north-1", regions.replica, 1)
+			outputs.Generations["example-root-2027-01"] = second
+
+			require.ErrorContains(t, outputs.Validate(),
+				`generation "example-root-2027-01": its key key/mrk-example (in any region) is also generation "example-root-2026-01"'s`)
 		})
 	}
+
+	// Another key in the same regions is no repeat.
+	outputs := validOutputs()
+	second := outputs.Generations["example-root-2026-01"]
+	second.Alias = custody.DefaultAliasPrefix + "example-root-2027-01"
+	second.PrimaryKeyARN = strings.Replace(testKey, "mrk-example", "mrk-other", 1)
+	second.ReplicaKeyARN = strings.Replace(testReplica, "mrk-example", "mrk-other", 1)
+	outputs.Generations["example-root-2027-01"] = second
+	require.NoError(t, outputs.Validate())
 }
 
 func TestAnActiveRootWithDomainsMustBeTrusted(t *testing.T) {

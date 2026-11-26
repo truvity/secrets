@@ -151,17 +151,11 @@ func (o *CustodyOutputs) Validate() error {
 	}
 
 	// One key is one generation's: two generations naming the same key
-	// would let a ceremony for one sign with the other's root.
+	// would let a ceremony for one sign with the other's root. A
+	// multi-region key keeps its id in every region, so a key is its
+	// partition, account and id, never its region: the same `mrk-` key
+	// published from two other regions is still the same key.
 	keys := map[string]string{}
-	claim := func(id, field, keyARN string) error {
-		if owner, taken := keys[keyARN]; taken {
-			return fmt.Errorf("generation %q: %s %s is also generation %q's", id, field, keyARN, owner)
-		}
-
-		keys[keyARN] = id
-
-		return nil
-	}
 
 	for _, id := range sortedKeys(o.Generations) {
 		generation := o.Generations[id]
@@ -169,13 +163,18 @@ func (o *CustodyOutputs) Validate() error {
 			return fmt.Errorf("generation %q: %w", id, err)
 		}
 
-		if err := claim(id, "primaryKeyArn", generation.PrimaryKeyARN); err != nil {
-			return err
+		// validate proved the primary and the replica are one key.
+		primary, err := arn.Parse(generation.PrimaryKeyARN)
+		if err != nil {
+			return fmt.Errorf("generation %q: primary key: %w", id, err)
 		}
 
-		if err := claim(id, "replicaKeyArn", generation.ReplicaKeyARN); err != nil {
-			return err
+		key := primary.Partition + ":" + primary.AccountID + ":" + primary.Resource
+		if owner, taken := keys[key]; taken {
+			return fmt.Errorf("generation %q: its key %s (in any region) is also generation %q's", id, primary.Resource, owner)
 		}
+
+		keys[key] = id
 	}
 
 	return nil

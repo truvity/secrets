@@ -17,7 +17,7 @@ from v0.2.0 on the Go module and `openbaoctl` with them.
 
 ### Changed
 
-- **Breaking:** custody outputs in which two generations name the same primary or replica key are refused (`CustodyOutputs.Validate`): a ceremony for one generation could otherwise sign with another's root.
+- **Breaking:** custody outputs in which two generations name the same key are refused (`CustodyOutputs.Validate`): a ceremony for one generation could otherwise sign with another's root. A key is its partition, account and `mrk-` id, in whatever region it is published.
 - **Breaking:** an active root generation that some trust domain is declared under must be in `migration.trustedGenerations` (`Validate`): trust a root before it issues. An active root with no domain below it yet needs no trust.
 - **`estate.ActiveGeneration` refuses a contract with several active generations** (it named the first before; such a contract was itself refused). Ask `Contract.TrustDomainRoot` for a domain's own root.
 - Error text: a domain below a generation that is not active now reads `… declared below root generation "<id>", which is <state>, not active`, and an unknown one `… which the contract does not author`; `EmergencyServerSpec` reads `only an active generation signs a break-glass leaf`.
