@@ -217,8 +217,9 @@ func WithVendorRoot(t testing.TB, in *estate.Inputs) {
 const VendorNamespace = "vendor-a"
 
 // WithVendorNamespace puts the vendor domain ([WithVendorDomain], which it
-// must follow) in a party namespace of its own, and admits admins to it.
-func WithVendorNamespace(t testing.TB, in *estate.Inputs, admins ...string) {
+// must follow) in a party namespace of its own, with the parties' doors
+// when doors is true.
+func WithVendorNamespace(t testing.TB, in *estate.Inputs, doors bool) {
 	t.Helper()
 
 	vendor := in.PKI.Contract.DNSTrustDomain(VendorDomain)
@@ -232,7 +233,18 @@ func WithVendorNamespace(t testing.TB, in *estate.Inputs, admins ...string) {
 		t.Fatalf("the contract with a vendor namespace does not validate: %v", err)
 	}
 
-	if len(admins) > 0 {
-		in.PKI.VendorAdmins = map[string][]string{VendorNamespace: admins}
+	if doors {
+		in.PKI.VendorDoors = &estate.VendorDoors{
+			Mount:       "jwt-pki",
+			Role:        "pki-admin",
+			Audience:    "{env}:openbao:{vendor}",
+			Groups:      []string{"{env}:{vendor}:pki:internal:deployer", "{env}:{vendor}:pki:internal:sre"},
+			UserClaim:   "sub",
+			GroupsClaim: "groups",
+			TTL:         "15m",
+			// The fixture's clusters are ops, alpha and beta; the
+			// intermediate's door admits beta's groups.
+			IntermediateEnvironment: "beta",
+		}
 	}
 }

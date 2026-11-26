@@ -210,3 +210,74 @@ func TestVendorNamespacesAreValidated(t *testing.T) {
 		})
 	}
 }
+
+// A door's bound claims reach the role as OpenBAO's comma-separated list,
+// matched as plain strings, and its token carries no default policy.
+func TestARolesBoundClaimsAndNoDefaultPolicy(t *testing.T) {
+	owner, _, err := deploy(t, withVendor(t), selected(apply.SelectVendorMounts(vendor)), false)
+	require.NoError(t, err)
+
+	role, ok := owner.named("vendor-a-role-jwt-admin-admin")
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"groups": "vendor-a-deployers,vendor-a-sres"}, role.Inputs["boundClaims"])
+	assert.Equal(t, "string", role.Inputs["boundClaimsType"])
+	assert.Equal(t, true, role.Inputs["tokenNoDefaultPolicy"])
+
+	// A role with neither sends neither.
+	whole, _, err := deploy(t, example(t), options(), false)
+	require.NoError(t, err)
+
+	for _, r := range whole.sorted() {
+		if r.Type == apply.TypeJWTAuthBackendRole {
+			assert.NotContains(t, r.Inputs, "boundClaims", r.Name)
+			assert.NotContains(t, r.Inputs, "tokenNoDefaultPolicy", r.Name)
+		}
+	}
+}
+
+func TestABoundClaimValueWithACommaIsRefused(t *testing.T) {
+	desired := withVendor(t)
+	desired.Vendors[0].Auth[0].Roles[0].BoundClaims = map[string][]string{"groups": {"a,b"}}
+	require.ErrorContains(t, desired.Validate(), `binds claim groups to "a,b": a value is non-empty and has no comma`)
+}
+
+// `acme/devel` and a namespace called `acme-devel` would share resource
+// names.
+func TestAVendorChildNamedLikeAnotherNamespaceIsRefused(t *testing.T) {
+	desired := withVendor(t)
+	desired.Vendors = append(desired.Vendors, model.Namespace{Name: "vendor-a-dev"})
+	require.ErrorContains(t, desired.Validate(), "vendor namespace vendor-a-dev and namespace vendor-a/dev are both named vendor-a-dev in the apply")
+
+	env := withVendor(t)
+	env.Namespaces = append(env.Namespaces, model.Namespace{Name: "vendor-a-dev"})
+	require.ErrorContains(t, env.Validate(), "are both named vendor-a-dev in the apply")
+}
+
+// A login below root makes no namespace, mount or auth mount, and applies
+// nothing without a selection: the server owner's run logs in at root.
+func TestALoginBelowRootIsRefusedWhatOnlyRootCanMake(t *testing.T) {
+	_, _, err := deploy(t, withVendor(t), vendorOptions(nil, vendor), false)
+	require.ErrorContains(t, err, "a login in namespace vendor-a needs a selection")
+
+	m, _, err := deploy(t, withVendor(t), vendorOptions(apply.SelectVendorMounts(vendor), vendor), false)
+	require.ErrorContains(t, err, "which only a login above it can make; the server owner's run logs in at root")
+	assert.Empty(t, m.sorted(), "nothing is registered, the provider included")
+
+	_, _, err = deploy(t, withVendor(t), vendorOptions(apply.SelectVendor(vendor), vendor), false)
+	require.NoError(t, err)
+}
+
+// The selection checks name a party's child the way its resources are
+// named: a group in `vendor-a/dev` split from its alias is refused.
+func TestSelectionChecksUseTheChildsResourceNames(t *testing.T) {
+	desired := withVendor(t)
+	desired.Vendors[1].Groups = []model.Group{{Name: "team", Policies: []string{"pki-vendor-a"}, Doors: []string{"jwt-dev"}}}
+	require.NoError(t, desired.Validate())
+
+	m, _, err := deploy(t, desired, selected(func(r apply.Resource) bool {
+		return r.Type != apply.TypeGroupAlias || !strings.HasPrefix(r.Name, "vendor-a-dev-")
+	}), false)
+	require.ErrorContains(t, err, "vendor-a-dev-alias-team")
+	// Refused by the check before anything is registered, not halfway.
+	assert.Empty(t, m.sorted(), "nothing is registered, the provider included")
+}

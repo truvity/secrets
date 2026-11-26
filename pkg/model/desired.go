@@ -232,6 +232,13 @@ func (d *Desired) Vendor(path string) bool {
 func (d *Desired) validateVendors(environments map[string]bool) error {
 	seen := map[string]bool{}
 
+	// A namespace's resources are named after its path with `/` as `-`:
+	// `acme/devel` and a namespace called `acme-devel` would share names.
+	labels := map[string]string{}
+	for name := range environments {
+		labels[name] = name
+	}
+
 	for i := range d.Vendors {
 		namespace := &d.Vendors[i]
 
@@ -259,6 +266,13 @@ func (d *Desired) validateVendors(environments map[string]bool) error {
 		}
 
 		seen[namespace.Name] = true
+
+		label := strings.ReplaceAll(namespace.Name, "/", "-")
+		if other, taken := labels[label]; taken {
+			return fmt.Errorf("model: vendor namespace %s and namespace %s are both named %s in the apply", namespace.Name, other, label)
+		}
+
+		labels[label] = namespace.Name
 
 		if len(namespace.Projects) > 0 {
 			return fmt.Errorf("model: vendor namespace %s holds a project; a project nests below an environment (ADR 0001)", namespace.Name)

@@ -32,6 +32,9 @@
             - openbao
           userClaim: sub
           groupsClaim: groups
+          boundClaims:
+            groups: [vendor-a-deployers, vendor-a-sres]
+          noDefaultPolicy: true
           policies:
             - vendor-a-admin
           ttl: 1h

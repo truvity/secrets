@@ -94,6 +94,13 @@ type (
 		UserClaim string `yaml:"userClaim"`
 		// GroupsClaim maps the token's groups onto identity groups: people.
 		GroupsClaim string `yaml:"groupsClaim,omitempty"`
+		// BoundClaims admits a token only when each named claim holds one
+		// of the values listed for it (a list claim, such as groups, when
+		// it holds any one of them). A value never contains a comma.
+		BoundClaims map[string][]string `yaml:"boundClaims,omitempty"`
+		// NoDefaultPolicy keeps OpenBAO's default policy off the token:
+		// it carries Policies and nothing else.
+		NoDefaultPolicy bool `yaml:"noDefaultPolicy,omitempty"`
 		// ClaimMappings copy claims into the alias metadata, so an audit
 		// entry says who a login was (claim -> metadata key).
 		ClaimMappings map[string]string `yaml:"claimMappings,omitempty"`
@@ -269,6 +276,18 @@ func (r *Role) Validate() error {
 
 	if strings.TrimSpace(r.UserClaim) == "" {
 		return fmt.Errorf("role %q names no user claim", r.Name)
+	}
+
+	for claim, values := range r.BoundClaims {
+		if strings.TrimSpace(claim) == "" || len(values) == 0 {
+			return fmt.Errorf("role %q binds a claim with no name or no value", r.Name)
+		}
+
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" || strings.Contains(value, ",") {
+				return fmt.Errorf("role %q binds claim %s to %q: a value is non-empty and has no comma", r.Name, claim, value)
+			}
+		}
 	}
 
 	if _, err := durationSeconds(r.TTL); err != nil {

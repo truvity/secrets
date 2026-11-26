@@ -42,11 +42,19 @@ the namespace a resource configures, so a selection can say so.
 
 **A login below root.** `apply.Login.Namespace` logs the provider in, and
 keeps it working, in one namespace: every namespace argument is then
-relative to it, and nothing outside it is registered. A party's stack logs
-in at `<namespace>`, through the roster's door there, which the server
-owner's stack declares for the groups the estate names
-(`estate.PKI.VendorAdmins`), each granted the party's PKI mounts and
-nothing of `sys/`.
+relative to it, and nothing outside it is registered.
+
+**The party's doors.** The server owner's stack declares one door per party
+namespace (`estate.PKI.VendorDoors`), every name of it the estate's: in each
+`<vendor>/<env>`, a jwt mount trusting the roster's issuer, with one role
+bound to that environment's audience and, as a bound claim on the groups
+claim, that environment's groups; its token carries one policy and no
+default policy. That policy names the PKI mounts of its own namespace and
+nothing else: no other environment, no parent, nothing of `sys/`. The door
+in `<vendor>` itself admits one environment's groups (the estate names
+which, e.g. its production) to the intermediate's mount alone. A role's
+bound claims and its no-default-policy are part of the model
+(`model.Role.BoundClaims`, `NoDefaultPolicy`).
 
 **Never deleted by a plan.** A party's namespaces are registered protected:
 deleting a namespace takes everything in it, and is slow enough to stick.
@@ -74,9 +82,20 @@ names as `namespace:`; its login role is on the cluster's mount there.
   resources refer to the mounts by their declared paths.
 - In `pkg/estate`, the estate's own private, origin and identity domains
   stay in root (the restore check, the identity CAs and the origin names
-  rest on them there); a party's further domains take namespaces. Moving a
-  domain into a namespace is a new intermediate in it, not a move: this
-  decision migrates nothing.
+  rest on them there). Each party's own private, origin and identity
+  chains are further domains in the party's namespace, declared beside the
+  estate's, never the estate's moved. Moving a domain into a namespace is a
+  new intermediate in it, not a move: this decision migrates nothing.
+- A party's namespace signs no person's request: a domain in one may not
+  declare credential roles, which read their subject from a people's
+  mount a party's namespace does not hold.
+- The honest boundary: an issuing CA in `<vendor>/<env>` is signed by the
+  intermediate in `<vendor>`, and the apply signs within one run. With a
+  door per environment and the intermediate's door reaching its own mount
+  alone, no single party token reaches both, so the signature of a party's
+  issuing CA needs either a run whose token spans the party's tree or a
+  hand-off of the request and the certificate between two runs. Which one
+  is not decided here.
 
 ## Alternatives considered
 

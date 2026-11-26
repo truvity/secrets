@@ -554,6 +554,13 @@ func configureVendors(desired *Desired, inputs *Inputs, derivation *pki.Derivati
 
 		path := authority.NamespacePath()
 
+		// A credential role signs a person's own request and reads its
+		// subject from a people's mount: a party's namespace holds none.
+		if len(authority.CredentialRoles) > 0 {
+			return fmt.Errorf("estate: trust domain %s in namespace %s declares credential roles; a party's namespace signs no person's request",
+				authority.Domain, authority.Namespace)
+		}
+
 		login, err := configureIssuingCA(inputs, at(path), authority)
 		if err != nil {
 			return err

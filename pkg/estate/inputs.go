@@ -1,6 +1,9 @@
 package estate
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/truvity/secrets/pkg/builder"
 	"github.com/truvity/secrets/pkg/model"
 	"github.com/truvity/secrets/pkg/pki"
@@ -337,12 +340,12 @@ type (
 	PKI struct {
 		// Contract is the authored contract (pkg/pki).
 		Contract *pki.Contract `yaml:"-"`
-		// VendorAdmins are, by party namespace, the groups admitted to that
-		// namespace's own login: the roster's door in `<namespace>`, each
-		// group granted the namespace's PKI mounts and nothing else. The
-		// party's own stack logs in there ([apply.Login.Namespace]). A
-		// party namespace with no entry has no login of its own.
-		VendorAdmins map[string][]string `yaml:"vendorAdmins,omitempty"`
+		// VendorDoors shapes the parties' own logins (ADR 0008): one door
+		// in each `<vendor>/<env>`, admitting that environment's groups to
+		// that environment's PKI mounts, and one in `<vendor>`, admitting
+		// IntermediateEnvironment's groups to the party's intermediate
+		// mount. nil declares none.
+		VendorDoors *VendorDoors `yaml:"vendorDoors,omitempty"`
 		// Private, Origin and Identity name the contract's trust domains.
 		// Private and Origin are two different DNS domains, and Private
 		// reaches every cluster: the identity domain and the restore check
@@ -388,3 +391,43 @@ type (
 		BootstrapSuffix string `yaml:"bootstrapSuffix"`
 	}
 )
+
+// VendorDoors is how a party namespace's own logins are shaped. Every name
+// is the estate's, with {env} and {vendor} standing for the environment and
+// the party: nothing here is built in.
+type VendorDoors struct {
+	// Mount is the jwt auth mount's path in each party namespace. It
+	// trusts the roster's issuer.
+	Mount string `yaml:"mount"`
+	// Role is the role on it, and the one policy its tokens carry (and
+	// nothing else: no default policy).
+	Role string `yaml:"role"`
+	// Audience is the role's one bound audience, e.g. "{env}:openbao:{vendor}".
+	Audience string `yaml:"audience"`
+	// Groups are the values of GroupsClaim the role admits, bound as a
+	// claim, e.g. "{env}:{vendor}:pki:internal:deployer".
+	Groups []string `yaml:"groups"`
+	// UserClaim and GroupsClaim are the token's claims the role reads.
+	UserClaim   string `yaml:"userClaim"`
+	GroupsClaim string `yaml:"groupsClaim"`
+	// TTL is the token's lifetime and its maximum: no longer than the
+	// roster's token.
+	TTL string `yaml:"ttl"`
+	// IntermediateEnvironment is whose audience and groups the door in
+	// `<vendor>` itself admits, to the party's intermediate mount alone.
+	IntermediateEnvironment string `yaml:"intermediateEnvironment"`
+}
+
+func (v *VendorDoors) validate() error {
+	if v.Mount == "" || v.Role == "" || v.Audience == "" || len(v.Groups) == 0 ||
+		v.UserClaim == "" || v.GroupsClaim == "" || v.TTL == "" || v.IntermediateEnvironment == "" {
+		return fmt.Errorf("estate: PKI.VendorDoors needs a mount, a role, an audience, groups, the user and groups claims, a ttl and the intermediate's environment")
+	}
+
+	return nil
+}
+
+// expand is a door's name for one environment of one party.
+func (v *VendorDoors) expand(pattern, environment, vendor string) string {
+	return strings.NewReplacer("{env}", environment, "{vendor}", vendor).Replace(pattern)
+}

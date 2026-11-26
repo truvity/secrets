@@ -38,7 +38,9 @@ func (d *Desired) Model() (*model.Desired, error) {
 		return nil, err
 	}
 
-	d.vendorAdmins(&out)
+	if err := d.vendorDoors(&out); err != nil {
+		return nil, err
+	}
 
 	if err := out.Validate(); err != nil {
 		return nil, err
@@ -83,49 +85,100 @@ func (d *Desired) vendorNamespaces() ([]model.Namespace, error) {
 	return out, nil
 }
 
-// vendorAdmins gives each party namespace with admin groups
-// (PKI.VendorAdmins) the roster's door and, per group, a grant on every PKI
-// mount of the party's namespace and its children: what the party's own
-// stack writes ([apply.SelectVendor]), and nothing of `sys/`.
-func (d *Desired) vendorAdmins(out *model.Desired) {
+// vendorDoors gives each party namespace its own login (PKI.VendorDoors):
+// in `<vendor>/<env>` a door admitting that environment's groups to that
+// environment's PKI mounts, and in `<vendor>` a door admitting the
+// intermediate's environment's groups to the intermediate mount. A door's
+// policy names the PKI mounts of its own namespace and nothing else --
+// nothing of `sys/`, nothing of another environment.
+func (d *Desired) vendorDoors(out *model.Desired) error {
+	doors := d.in.PKI.VendorDoors
+	if doors == nil {
+		return nil
+	}
+
+	if err := doors.validate(); err != nil {
+		return err
+	}
+
+	if !slices.ContainsFunc(d.in.Clusters, func(c Cluster) bool { return c.Name == doors.IntermediateEnvironment }) {
+		return fmt.Errorf("estate: PKI.VendorDoors.IntermediateEnvironment %q is no cluster of the estate", doors.IntermediateEnvironment)
+	}
+
 	for i := range out.Vendors {
 		namespace := &out.Vendors[i]
 
-		groups := d.in.PKI.VendorAdmins[namespace.Name]
-		if len(groups) == 0 || strings.Contains(namespace.Name, "/") {
-			continue
+		vendor, environment, nested := strings.Cut(namespace.Name, "/")
+		if !nested {
+			environment = doors.IntermediateEnvironment
+		}
+
+		for j := range namespace.Auth {
+			if namespace.Auth[j].Path == doors.Mount {
+				return fmt.Errorf("estate: PKI.VendorDoors.Mount %s is also %s's cluster mount", doors.Mount, namespace.Name)
+			}
 		}
 
 		var rules []model.Rule
-
-		for j := range out.Vendors {
-			other := &out.Vendors[j]
-			prefix := ""
-
-			switch {
-			case other.Name == namespace.Name:
-			case strings.HasPrefix(other.Name, namespace.Name+"/"):
-				prefix = strings.TrimPrefix(other.Name, namespace.Name+"/") + "/"
-			default:
-				continue
-			}
-
-			for k := range other.PKI {
-				rules = append(rules, model.Rule{
-					Path:         prefix + other.PKI[k].Path + "/*",
-					Capabilities: []string{model.CapCreate, model.CapRead, model.CapUpdate, model.CapDelete, model.CapList},
-				})
-			}
+		for j := range namespace.PKI {
+			rules = append(rules, doorRules(namespace.PKI[j].Path, !nested)...)
 		}
 
-		namespace.Auth = append(namespace.Auth, d.in.Roster.Door())
-
-		for _, group := range groups {
-			policy, grant := d.in.Roster.JobGrant(group, rules...)
-			namespace.Policies = append(namespace.Policies, policy)
-			namespace.Groups = append(namespace.Groups, grant)
+		groups := make([]string, 0, len(doors.Groups))
+		for _, group := range doors.Groups {
+			groups = append(groups, doors.expand(group, environment, vendor))
 		}
+
+		namespace.Auth = append(namespace.Auth, model.JWTMount{
+			Path:         doors.Mount,
+			Description:  "the roster's tokens for " + vendor + "'s own stack, " + environment + "'s groups",
+			DiscoveryURL: d.in.Roster.Issuer,
+			Roles: []model.Role{{
+				Name:            doors.Role,
+				BoundAudiences:  []string{doors.expand(doors.Audience, environment, vendor)},
+				UserClaim:       doors.UserClaim,
+				GroupsClaim:     doors.GroupsClaim,
+				BoundClaims:     map[string][]string{doors.GroupsClaim: groups},
+				Policies:        []string{doors.Role},
+				NoDefaultPolicy: true,
+				TTL:             doors.TTL,
+			}},
+		})
+		namespace.Policies = append(namespace.Policies, model.Policy{Name: doors.Role, Rules: rules})
 	}
+
+	return nil
+}
+
+// doorRules are what a party's own stack does in one PKI mount, and no
+// more: generate a key that never leaves the mount and its request, import
+// the signed certificate, name the issuer and the key, configure the
+// mount, and manage the roles; on the intermediate's mount also sign the
+// party's issuing CAs. Never issue or sign a leaf (cert-manager has its own
+// login for that), never generate or import an exportable key.
+func doorRules(mount string, intermediate bool) []model.Rule {
+	write := []string{model.CapCreate, model.CapUpdate}
+	read := []string{model.CapRead, model.CapList}
+	manage := []string{model.CapCreate, model.CapRead, model.CapUpdate, model.CapDelete, model.CapList}
+
+	rules := []model.Rule{
+		{Path: mount + "/intermediate/generate/internal", Capabilities: write},
+		{Path: mount + "/intermediate/set-signed", Capabilities: write},
+		{Path: mount + "/issuer/*", Capabilities: []string{model.CapRead, model.CapUpdate}},
+		{Path: mount + "/issuers", Capabilities: read},
+		{Path: mount + "/key/*", Capabilities: []string{model.CapRead, model.CapUpdate}},
+		{Path: mount + "/keys", Capabilities: read},
+		{Path: mount + "/config/*", Capabilities: []string{model.CapRead, model.CapUpdate}},
+		{Path: mount + "/roles/*", Capabilities: manage},
+		{Path: mount + "/roles", Capabilities: read},
+		{Path: mount + "/cert/*", Capabilities: read},
+	}
+
+	if intermediate {
+		rules = append(rules, model.Rule{Path: mount + "/root/sign-intermediate", Capabilities: write})
+	}
+
+	return rules
 }
 
 // IdentityBootstrapCSRName is the Pulumi name of the certificate signing
