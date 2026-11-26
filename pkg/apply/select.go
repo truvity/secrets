@@ -71,6 +71,56 @@ func (a *applier) owns(namespace, typ, name string) bool {
 	return a.opts.Select(Resource{Type: typ, Name: name, Namespace: namespace})
 }
 
+// checkLoginNamespace refuses a run logged in below root that would make
+// what only a login above it can: everything with no selection, a
+// namespace (it would be made inside itself), a mount or an auth mount
+// (`sys/`, which a party's token may not write). The server owner's half of
+// a party's namespace ([SelectVendorMounts]) logs in at root.
+func (a *applier) checkLoginNamespace() error {
+	base := a.opts.Login.Namespace
+	if base == "" {
+		return nil
+	}
+
+	if a.opts.Select == nil {
+		return fmt.Errorf("%s: a login in namespace %s needs a selection; the whole model is applied from root", selectRefusalPrefix, base)
+	}
+
+	for _, namespace := range a.desired.Applied() {
+		if !within(namespace.Name, base) {
+			continue
+		}
+
+		s := &scope{namespace: namespace, label: scopeLabel(namespace)}
+		refuse := func(typ, name string) error {
+			if a.opts.Select(Resource{Type: typ, Name: name, Namespace: namespace.Name}) {
+				return fmt.Errorf("%s: a login in namespace %s selects %s %s, which only a login above it can make; the server owner's run logs in at root",
+					selectRefusalPrefix, base, typ, name)
+			}
+
+			return nil
+		}
+
+		if err := refuse(TypeNamespace, a.name("ns-"+s.label)); err != nil {
+			return err
+		}
+
+		for i := range namespace.PKI {
+			if err := refuse(TypeMount, a.name(mountName(s, namespace.PKI[i].Path))); err != nil {
+				return err
+			}
+		}
+
+		for i := range namespace.Auth {
+			if err := refuse(TypeJWTAuthBackend, a.name(s.label+"-auth-"+namespace.Auth[i].Path)); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
 // within reports whether namespace is base or below it.
 func within(namespace, base string) bool {
 	return namespace == base || strings.HasPrefix(namespace, base+"/")
@@ -134,12 +184,16 @@ func (a *applier) together(namespace, typ, name string, unitOwned bool, head, ru
 // namespaces as Deploy does and asks the same unit questions the
 // registration asks again; it registers nothing.
 func (a *applier) checkSelection() error {
+	if err := a.checkLoginNamespace(); err != nil {
+		return err
+	}
+
 	if a.opts.Select == nil {
 		return nil
 	}
 
 	for _, namespace := range a.desired.Applied() {
-		s := &scope{namespace: namespace, label: namespace.Label()}
+		s := &scope{namespace: namespace, label: scopeLabel(namespace)}
 
 		for i := range namespace.PKI {
 			if _, _, _, err := a.pkiUnit(s, &namespace.PKI[i]); err != nil {

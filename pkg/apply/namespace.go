@@ -118,7 +118,7 @@ func dependsOn(resources ...pulumi.Resource) []pulumi.ResourceOption {
 
 // namespace registers one namespace and everything in it.
 func (a *applier) namespace(namespace *model.Namespace) error {
-	s := &scope{namespace: namespace, label: strings.ReplaceAll(namespace.Label(), "/", "-")}
+	s := &scope{namespace: namespace, label: scopeLabel(namespace)}
 	s.base = options(a.opts.ResourceOptions, pulumi.Provider(a.provider))
 	s.inside = s.base
 
@@ -248,6 +248,12 @@ func (a *applier) namespace(namespace *model.Namespace) error {
 	}
 
 	return nil
+}
+
+// scopeLabel is the namespace's prefix in its resources' names: its path,
+// `/` written as `-`, or "root".
+func scopeLabel(namespace *model.Namespace) string {
+	return strings.ReplaceAll(namespace.Label(), "/", "-")
 }
 
 // namespaceArg is a resource's `namespace` argument for a namespace path:
@@ -465,6 +471,22 @@ func (a *applier) role(s *scope, mount string, backendPath pulumi.StringPtrInput
 
 	if role.GroupsClaim != "" {
 		args.GroupsClaim = pulumi.String(role.GroupsClaim)
+	}
+
+	// A list of values is OpenBAO's comma-separated form; the model has
+	// refused a value with a comma of its own.
+	if len(role.BoundClaims) > 0 {
+		claims := pulumi.StringMap{}
+		for claim, values := range role.BoundClaims {
+			claims[claim] = pulumi.String(strings.Join(values, ","))
+		}
+
+		args.BoundClaims = claims
+		args.BoundClaimsType = pulumi.String("string")
+	}
+
+	if role.NoDefaultPolicy {
+		args.TokenNoDefaultPolicy = pulumi.Bool(true)
 	}
 
 	if len(role.ClaimMappings) > 0 {
