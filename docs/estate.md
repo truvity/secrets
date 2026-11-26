@@ -62,7 +62,18 @@ and is never applied; the web UI's door and `Names.OperatorKV` are.
 `Cluster.OriginNames`. Any further DNS trust domain takes its `{zone}` from
 the cluster's `Zones`, keyed by the domain's name: a domain that reaches the
 cluster without an entry is refused, and so is an entry that no further
-domain reaching the cluster reads. Every issuing CA gets a cert-manager login named
+domain reaching the cluster reads. `PKI.Private` and `PKI.Origin` are two
+different domains, and the private one reaches every cluster; the origin
+zone is needed only where the origin domain reaches. A domain that lists an
+environment the estate has no cluster or namespace for is refused.
+
+`PKI.PendingDomains` names further DNS domains whose intermediate the root
+has not signed yet. Each one renders only `PrivatePKI.Pending`: nothing in
+an environment, and no zone needed, though a `Cluster.Zones` entry is kept.
+`pkg/estate/stack` bootstraps its root mount and its key's request beside
+the apply, under the names the apply adopts once the domain is signed. It
+exports the request under the domain's `DomainCSROutputs` entry. Drop the
+domain from the list in the change that commits its artifact. Every issuing CA gets a cert-manager login named
 after `PKI.ClusterIssuers[domain]`. An environment whose identity CA is not
 `PKI.Signed` yet renders nothing of the identity domain.
 

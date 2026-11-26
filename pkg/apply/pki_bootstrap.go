@@ -86,7 +86,10 @@ type (
 	// (docs/pki.md, "per-environment identity CAs";
 	// [github.com/truvity/secrets/pkg/pki]'s own doc has the mechanism).
 	// Nothing here is signed, and no issuer is named: the root cannot
-	// sign a request that does not exist yet.
+	// sign a request that does not exist yet. A DNS domain intermediate
+	// the root has not signed yet (pkg/pki's PendingIntermediate) is
+	// bootstrapped the same way, in root (Namespace ""), with its own
+	// mount (MountExists false).
 	BootstrapEnvironmentCAOptions struct {
 		// Namespace is "" for root.
 		Namespace string

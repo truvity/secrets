@@ -478,7 +478,22 @@ none reaches every environment, as every DNS domain did before the list
 existed. An environment needs a zone only for the domains that reach it, and
 one a domain does not reach gets no issuing CA, roles or mount of it; the
 domain intermediate is one either way, in the root namespace. It refuses a
-domain declared below a generation that is not the active one.
+domain declared below a generation that is not the active one, and a zone
+that is not a lower-case DNS name, is not its domain's suffix or under it,
+or falls outside the intermediate's name constraint. In a name-constrained
+domain it also refuses a zone equal to the whole suffix, two environments
+with one zone, and one zone under another's: their issuing CAs would
+overlap. `Validate` refuses two DNS domains whose suffixes or constraint
+entries are equal or nested.
+
+`DeriveWith` takes `DeriveOptions` as well. `PendingDomains` names the DNS
+domains whose intermediate the root has not signed yet. Such a domain
+derives no authority and nothing in any environment, so no environment needs
+its zone. It derives a `PendingIntermediate` in `Derivation.Pending`: its
+domain mount's path, description and lease, and its key's name and subject.
+That is phase A of its ceremony, which `apply.BootstrapEnvironmentCA`
+registers in root under the names `Deploy` later adopts. A pending domain
+needs a domain mount of its own. `Derive` is `DeriveWith` with no options.
 
 The result is a `Derivation`: `Domains` (the domain intermediates, `external`
 issuers whose committed artifact is at `ArtifactPath`) and `Issuing` (each

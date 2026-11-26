@@ -22,6 +22,23 @@ type (
 	PrivatePKI struct {
 		Root    RootAuthority     `yaml:"root"`
 		Domains []DomainAuthority `yaml:"domains"`
+		// Pending are the domain intermediates the root has not signed yet
+		// (PKI.PendingDomains): their mount, key and request alone.
+		Pending []PendingDomain `yaml:"pending,omitempty"`
+	}
+
+	// PendingDomain is one DNS domain intermediate the root has not signed
+	// yet: phase A of its ceremony, bootstrapped beside the apply under the
+	// names the apply adopts once it is signed (pkg/estate/stack).
+	PendingDomain struct {
+		TrustDomain      string `yaml:"trustDomain"`
+		Mount            string `yaml:"mount"`
+		MountDescription string `yaml:"mountDescription"`
+		LeaseTTL         string `yaml:"leaseTtl"`
+		KeyName          string `yaml:"keyName"`
+		CommonName       string `yaml:"commonName"`
+		Organization     string `yaml:"organization"`
+		KeyCurve         string `yaml:"keyCurve"`
 	}
 
 	// RootAuthority is the contract's active root generation.
@@ -133,6 +150,10 @@ func configurePrivatePKI(desired *Desired, inputs *Inputs, clusters []Cluster) (
 		byName[clusters[i].Name] = clusters[i]
 	}
 
+	if err := checkPKIDomains(in, desired, byName); err != nil {
+		return nil, err
+	}
+
 	environments := make([]pki.Environment, 0, len(desired.Namespaces))
 
 	for i := range desired.Namespaces {
@@ -149,7 +170,7 @@ func configurePrivatePKI(desired *Desired, inputs *Inputs, clusters []Cluster) (
 		environments = append(environments, environment)
 	}
 
-	derivation, err := contract.Derive(environments)
+	derivation, err := contract.DeriveWith(environments, pki.DeriveOptions{PendingDomains: in.PendingDomains})
 	if err != nil {
 		return nil, fmt.Errorf("estate: %w", err)
 	}
@@ -196,6 +217,21 @@ func configurePrivatePKI(desired *Desired, inputs *Inputs, clusters []Cluster) (
 		})
 	}
 
+	for i := range derivation.Pending {
+		pending := &derivation.Pending[i]
+
+		desired.PKI.Pending = append(desired.PKI.Pending, PendingDomain{
+			TrustDomain:      pending.Domain,
+			Mount:            pending.Mount,
+			MountDescription: pending.MountDescription,
+			LeaseTTL:         pending.LeaseTTL,
+			KeyName:          pending.KeyName,
+			CommonName:       pending.CommonName,
+			Organization:     pending.Organization,
+			KeyCurve:         pending.KeyCurve,
+		})
+	}
+
 	logins := make(map[string][]builder.Workload, len(desired.Namespaces))
 
 	for i := range desired.Namespaces {
@@ -219,6 +255,75 @@ func configurePrivatePKI(desired *Desired, inputs *Inputs, clusters []Cluster) (
 	return logins, nil
 }
 
+// checkPKIDomains refuses trust-domain inputs the derivation would read
+// wrongly: the private and origin domains as one, a private domain that does
+// not reach every cluster, a pending private or origin domain, and a domain
+// that lists an environment the estate has no cluster or namespace for.
+func checkPKIDomains(in *PKI, desired *Desired, clusters map[string]Cluster) error {
+	if in.Private == in.Origin {
+		return fmt.Errorf("estate: PKI.Private and PKI.Origin are both %q: they are two different trust domains", in.Private)
+	}
+
+	for _, name := range in.PendingDomains {
+		if name == in.Private || name == in.Origin {
+			return fmt.Errorf("estate: trust domain %s cannot be pending: the private and origin domains are signed before anything else", name)
+		}
+	}
+
+	known := make(map[string]bool, len(clusters)+len(desired.Namespaces))
+	for name := range clusters {
+		known[name] = true
+	}
+
+	for i := range desired.Namespaces {
+		known[desired.Namespaces[i].Name] = true
+	}
+
+	contract := in.Contract
+
+	if private := contract.DNSTrustDomain(in.Private); private != nil {
+		names := make([]string, 0, len(clusters))
+		for name := range clusters {
+			names = append(names, name)
+		}
+
+		slices.Sort(names)
+
+		for _, name := range names {
+			if !private.Reaches(name) {
+				return fmt.Errorf("estate: the private domain %s does not reach cluster %s: it reaches every cluster", in.Private, name)
+			}
+		}
+	}
+
+	lists := map[string][]string{}
+
+	for i := range contract.TrustDomains.DNS {
+		lists["dns "+contract.TrustDomains.DNS[i].Name] = contract.TrustDomains.DNS[i].Environments
+	}
+
+	for i := range contract.TrustDomains.URI {
+		lists["uri "+contract.TrustDomains.URI[i].Name] = contract.TrustDomains.URI[i].Environments
+	}
+
+	domains := make([]string, 0, len(lists))
+	for domain := range lists {
+		domains = append(domains, domain)
+	}
+
+	slices.Sort(domains)
+
+	for _, domain := range domains {
+		for _, environment := range lists[domain] {
+			if !known[environment] {
+				return fmt.Errorf("estate: trust domain %s lists environment %q, which is no cluster or namespace of the estate", domain, environment)
+			}
+		}
+	}
+
+	return nil
+}
+
 // pkiEnvironment is one environment's inputs to the library's derivation:
 // the zone each trust domain substitutes for {zone}, the names the origin
 // role may sign, and whether the environment's own identity CA is signed.
@@ -228,16 +333,10 @@ func pkiEnvironment(in *PKI, cluster *Cluster) (pki.Environment, error) {
 		return pki.Environment{}, err
 	}
 
-	originZone, err := zoneOf(in, cluster, in.Origin)
-	if err != nil {
-		return pki.Environment{}, err
-	}
-
 	environment := pki.Environment{
 		Name: cluster.Name,
 		Zones: map[string]string{
 			in.Private: privateZone,
-			in.Origin:  originZone,
 			// A workload's identity is a host in its environment's private
 			// zone.
 			in.Identity: privateZone,
@@ -245,6 +344,16 @@ func pkiEnvironment(in *PKI, cluster *Cluster) (pki.Environment, error) {
 		Catalog: map[string][]string{
 			pki.CatalogKey(in.Origin, in.OriginRole): slices.Clone(cluster.OriginNames),
 		},
+	}
+
+	// The origin zone is needed only where the origin domain reaches.
+	if origin := in.Contract.DNSTrustDomain(in.Origin); origin == nil || origin.Reaches(cluster.Name) {
+		originZone, err := zoneOf(in, cluster, in.Origin)
+		if err != nil {
+			return pki.Environment{}, err
+		}
+
+		environment.Zones[in.Origin] = originZone
 	}
 
 	if err := furtherZones(in, cluster, environment.Zones); err != nil {
@@ -264,13 +373,20 @@ func pkiEnvironment(in *PKI, cluster *Cluster) (pki.Environment, error) {
 // the private and origin ones that reaches the cluster, from
 // Cluster.Zones. It refuses a domain that reaches the cluster with no zone,
 // and an entry of Cluster.Zones that feeds no such domain: a zone nothing
-// reads is a mistake in the inputs, not a default.
+// reads is a mistake in the inputs, not a default. A pending domain needs no
+// zone yet, and its entry is kept for when it is signed.
 func furtherZones(in *PKI, cluster *Cluster, zones map[string]string) error {
 	fed := map[string]bool{}
 
 	for i := range in.Contract.TrustDomains.DNS {
 		domain := &in.Contract.TrustDomains.DNS[i]
 		if domain.Name == in.Private || domain.Name == in.Origin || !domain.Reaches(cluster.Name) {
+			continue
+		}
+
+		if slices.Contains(in.PendingDomains, domain.Name) {
+			fed[domain.Name] = true
+
 			continue
 		}
 

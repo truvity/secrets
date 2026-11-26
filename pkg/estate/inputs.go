@@ -338,6 +338,9 @@ type (
 		// Contract is the authored contract (pkg/pki).
 		Contract *pki.Contract `yaml:"-"`
 		// Private, Origin and Identity name the contract's trust domains.
+		// Private and Origin are two different DNS domains, and Private
+		// reaches every cluster: the identity domain and the restore check
+		// rest on each cluster's private zone.
 		Private  string `yaml:"private"`
 		Origin   string `yaml:"origin"`
 		Identity string `yaml:"identity"`
@@ -347,6 +350,13 @@ type (
 		// CA is committed yet. Until it is, the environment renders nothing
 		// of the identity domain.
 		Signed map[string]bool `yaml:"signed,omitempty"`
+		// PendingDomains names the further DNS trust domains whose
+		// intermediate the root has not signed yet (pki.DeriveOptions). Such
+		// a domain renders only its root-namespace mount, key and request
+		// ([PrivatePKI.Pending]); no issuing CA, role or login, and no
+		// cluster needs its zone (an entry in Cluster.Zones is kept for when
+		// it is signed). The private and origin domains are never pending.
+		PendingDomains []string `yaml:"pendingDomains,omitempty"`
 		// ClusterIssuers names the cert-manager issuer of each trust domain:
 		// the login role, and with PolicyPrefix and AudiencePrefix its
 		// policy and audience.
