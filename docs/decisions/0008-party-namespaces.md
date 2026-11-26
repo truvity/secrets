@@ -50,11 +50,24 @@ namespace (`estate.PKI.VendorDoors`), every name of it the estate's: in each
 bound to that environment's audience and, as a bound claim on the groups
 claim, that environment's groups; its token carries one policy and no
 default policy. That policy names the PKI mounts of its own namespace and
-nothing else: no other environment, no parent, nothing of `sys/`. The door
-in `<vendor>` itself admits one environment's groups (the estate names
-which, e.g. its production) to the intermediate's mount alone. A role's
+nothing else: no other environment, no parent, nothing of `sys/`; it is
+for day-to-day work there (roles, configuration). The door in `<vendor>`
+itself admits the production environment's groups (an input, intended to
+be production for every party) and is the ONE door whose policy spans the
+party's tree: the intermediate's mount and every `<vendor>/<env>` PKI mount.
+It is for the run that (re)issues the party's issuing CAs in one apply:
+the request in the child, the signature at the intermediate, the import
+back in the child. Every door grants only what a party's stack does in a
+PKI mount -- the internal key and its request, the import, issuers, keys,
+configuration and roles -- never a leaf (`issue`, `sign`: cert-manager has
+its own login), never an exportable key, never `sys/`; signing another CA
+(`root/sign-intermediate`) is on the intermediate's mount alone. A role's
 bound claims and its no-default-policy are part of the model
 (`model.Role.BoundClaims`, `NoDefaultPolicy`).
+
+**Accepted:** production's people can reach the lower environments' CAs
+through the intermediate's door, because production outranks them; an
+environment's people reach only their own.
 
 **Never deleted by a plan.** A party's namespaces are registered protected:
 deleting a namespace takes everything in it, and is slow enough to stick.
@@ -89,13 +102,10 @@ names as `namespace:`; its login role is on the cluster's mount there.
 - A party's namespace signs no person's request: a domain in one may not
   declare credential roles, which read their subject from a people's
   mount a party's namespace does not hold.
-- The honest boundary: an issuing CA in `<vendor>/<env>` is signed by the
-  intermediate in `<vendor>`, and the apply signs within one run. With a
-  door per environment and the intermediate's door reaching its own mount
-  alone, no single party token reaches both, so the signature of a party's
-  issuing CA needs either a run whose token spans the party's tree or a
-  hand-off of the request and the certificate between two runs. Which one
-  is not decided here.
+- A party's issuing CA in `<vendor>/<env>` is signed by the intermediate in
+  `<vendor>` within one apply: the intermediate's run, logged in at
+  `<vendor>` through its door, selects the party's PKI contents
+  (`apply.SelectVendor`) and names each child relative to the login.
 
 ## Alternatives considered
 
@@ -108,3 +118,7 @@ names as `namespace:`; its login role is on the cluster's mount there.
   environment policies would not carry over.
 - **Letting the party make its own mounts.** Without Sentinel the policy
   that allows a PKI mount allows any mount, and an auth mount is a door.
+- **A hand-off between an environment's run and the intermediate's run**
+  (the request out of one stack, the certificate into the other), so no
+  door would span the tree. Rejected for now: more machinery for little
+  gain, since production's people already outrank the lower environments.
