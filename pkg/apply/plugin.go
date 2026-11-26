@@ -47,7 +47,7 @@ func (a *applier) plugin(desired *model.Plugin, base []pulumi.ResourceOption) er
 	}
 
 	name := a.name("plugin-" + desired.Type + "-" + desired.Name)
-	if !a.owns(TypePlugin, name) {
+	if !a.owns("", TypePlugin, name) {
 		return nil
 	}
 

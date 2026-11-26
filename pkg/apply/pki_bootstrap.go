@@ -2,6 +2,7 @@ package apply
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/pulumi/pulumi-vault/sdk/v7/go/vault"
 	"github.com/pulumi/pulumi-vault/sdk/v7/go/vault/pkisecret"
@@ -93,6 +94,14 @@ type (
 	BootstrapEnvironmentCAOptions struct {
 		// Namespace is "" for root.
 		Namespace string
+		// LoginNamespace is the run's [Login.Namespace]: Namespace is sent
+		// relative to it. The names never change with it.
+		LoginNamespace string
+		// RequestElsewhere registers the mount alone: in a party's
+		// namespace the server owner makes the empty mount and the
+		// party's own stack the key and its request (with MountExists).
+		// The returned output is then the zero value; export nothing.
+		RequestElsewhere bool
 		// Mount is the PKI mount path this CA's key is generated inside.
 		Mount string
 		// MountExists is true for an environment moving from a shared
@@ -171,7 +180,12 @@ func BootstrapEnvironmentCA(c *pulumi.Context, provider *vault.Provider, options
 	opts := []pulumi.ResourceOption{pulumi.Provider(provider), pulumi.Protect(true)}
 
 	var namespace pulumi.StringPtrInput
-	if options.Namespace != "" {
+
+	switch base := options.LoginNamespace; {
+	case options.Namespace == base:
+	case base != "" && strings.HasPrefix(options.Namespace, base+"/"):
+		namespace = pulumi.String(strings.TrimPrefix(options.Namespace, base+"/"))
+	default:
 		namespace = pulumi.String(options.Namespace)
 	}
 
@@ -217,6 +231,10 @@ func BootstrapEnvironmentCA(c *pulumi.Context, provider *vault.Provider, options
 		}
 
 		dependsOn = append(dependsOn, mount)
+	}
+
+	if options.RequestElsewhere {
+		return pulumi.StringOutput{}, nil
 	}
 
 	// `internal`: OpenBAO generates the key inside the mount and keeps

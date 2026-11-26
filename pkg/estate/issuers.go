@@ -23,6 +23,10 @@ type (
 	IssuerView struct {
 		// Name is the ClusterIssuer.
 		Name string
+		// Namespace is the trust domain's party namespace, empty for a
+		// domain in root: the issuer's server namespace, and the one its
+		// login is in, is then `<Namespace>/<env>` ([IssuerView.ServerNamespace]).
+		Namespace string
 		// SignPath is `<issuing mount>/sign/<role>`: the one endpoint the
 		// issuer's login may use.
 		SignPath string
@@ -171,7 +175,7 @@ func (in *PKI) view(name, domain, role, login string, shared bool) (IssuerView, 
 		return IssuerView{}, err
 	}
 
-	view := IssuerView{Name: name, SignPath: mount + "/sign/" + role, LoginRole: login}
+	view := IssuerView{Name: name, SignPath: mount + "/sign/" + role, LoginRole: login, Namespace: vendorOf(in.Contract, domain)}
 	if shared {
 		view.Audience = in.AudiencePrefix + login
 	}
@@ -191,6 +195,18 @@ func (in *PKI) view(name, domain, role, login string, shared bool) (IssuerView, 
 	}
 
 	return view, nil
+}
+
+// ServerNamespace is the server namespace cert-manager's vault issuer names
+// (`namespace:`) in environment: the environment's own for a domain in
+// root, `<Namespace>/<environment>` for a party's domain. Its login role is
+// on the cluster's mount in that same namespace.
+func (v IssuerView) ServerNamespace(environment string) string {
+	if v.Namespace == "" {
+		return environment
+	}
+
+	return v.Namespace + "/" + environment
 }
 
 // issuingMount is the issuing mount of a trust domain, and the leaf role when

@@ -83,9 +83,17 @@ type (
 
 	// Login is a JWT login into root that the provider uses as its token.
 	Login struct {
-		// Mount and Role are the auth mount and the role in root.
+		// Mount and Role are the auth mount and the role in root (or in
+		// Namespace).
 		Mount string
 		Role  string
+		// Namespace is the namespace the login's mount is in and the
+		// provider works in; empty is root, as before. A run logged in
+		// below root registers nothing outside its namespace (a token
+		// scoped to it could not write there), and every namespace
+		// argument it sends is relative to it -- a party's own stack
+		// ([SelectVendor]) logs in at `<vendor>`.
+		Namespace string
 		// Token returns the JWT to log in with. It is called once, after
 		// BeforeApply, and the result is marked secret.
 		Token func(context.Context) (string, error)

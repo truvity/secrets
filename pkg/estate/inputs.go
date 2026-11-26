@@ -337,6 +337,12 @@ type (
 	PKI struct {
 		// Contract is the authored contract (pkg/pki).
 		Contract *pki.Contract `yaml:"-"`
+		// VendorAdmins are, by party namespace, the groups admitted to that
+		// namespace's own login: the roster's door in `<namespace>`, each
+		// group granted the namespace's PKI mounts and nothing else. The
+		// party's own stack logs in there ([apply.Login.Namespace]). A
+		// party namespace with no entry has no login of its own.
+		VendorAdmins map[string][]string `yaml:"vendorAdmins,omitempty"`
 		// Private, Origin and Identity name the contract's trust domains.
 		// Private and Origin are two different DNS domains, and Private
 		// reaches every cluster: the identity domain and the restore check

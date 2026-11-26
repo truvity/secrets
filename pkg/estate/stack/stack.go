@@ -88,12 +88,12 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 				continue
 			}
 
-			owned, err := selectsBootstrap(opts.Select, rename, environment, identity.IssuingMountPath(), identity.EnvironmentCAIssuerName(environment))
+			owned, err := selectsBootstrap(opts.Select, rename, environment, identity.IssuingMountPath(), identity.EnvironmentCAIssuerName(environment), false)
 			if err != nil {
 				return err
 			}
 
-			bootstraps[environment] = owned
+			bootstraps[environment] = owned == bootstrapBoth
 		}
 	}
 
@@ -122,12 +122,12 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 			return fmt.Errorf("stack: trust domain %s has no request output", pending.TrustDomain)
 		}
 
-		owned, err := selectsBootstrap(opts.Select, rename, "", pending.Mount, pending.KeyName)
+		owned, err := selectsBootstrap(opts.Select, rename, pending.Namespace, pending.Mount, pending.KeyName, pending.Namespace != "")
 		if err != nil {
 			return err
 		}
 
-		pendingDomains[pending.TrustDomain] = owned
+		pendingDomains[pending.TrustDomain] = owned != bootstrapNone
 	}
 
 	result, err := apply.Deploy(c, state, apply.Options{
@@ -170,7 +170,13 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 			continue
 		}
 
+		parts, _ := selectsBootstrap(opts.Select, rename, pending.Namespace, pending.Mount, pending.KeyName, pending.Namespace != "")
+
 		csr, err := apply.BootstrapEnvironmentCA(c, result.Provider, apply.BootstrapEnvironmentCAOptions{
+			Namespace:        pending.Namespace,
+			LoginNamespace:   opts.Login.Namespace,
+			MountExists:      parts == bootstrapRequest,
+			RequestElsewhere: parts == bootstrapMount,
 			Mount:            pending.Mount,
 			DefaultLeaseTTL:  pending.LeaseTTL,
 			MaxLeaseTTL:      pending.LeaseTTL,
@@ -185,7 +191,9 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 			return err
 		}
 
-		c.Export(opts.DomainCSROutputs[pending.TrustDomain], csr)
+		if parts != bootstrapMount {
+			c.Export(opts.DomainCSROutputs[pending.TrustDomain], csr)
+		}
 	}
 
 	if identity == nil || len(identity.Environments) == 0 {
@@ -252,27 +260,54 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 // otherwise when it selects the CA's mount, and then its request too (the
 // two are one unit). The names are the ones apply.Deploy gives the same
 // objects once the CA is signed.
-func selectsBootstrap(selects func(apply.Resource) bool, rename func(string) string, namespace, mount, keyName string) (bool, error) {
+//
+// In a party's namespace (vendor) the two are selected apart: the server
+// owner's stack makes the mount, the party's own the key and request.
+func selectsBootstrap(
+	selects func(apply.Resource) bool, rename func(string) string, namespace, mount, keyName string, vendor bool,
+) (bootstrapParts, error) {
 	if selects == nil {
-		return true, nil
+		return bootstrapBoth, nil
 	}
 
 	mountName := mount
 	if namespace != "" {
-		mountName = namespace + "-" + mount
+		mountName = strings.ReplaceAll(namespace, "/", "-") + "-" + mount
 	}
 
-	mountResource := apply.Resource{Type: apply.TypeMount, Name: rename(mountName)}
-	csrResource := apply.Resource{Type: apply.TypePKIIntermediateCertRequest, Name: rename(keyName + "-csr")}
+	mountResource := apply.Resource{Type: apply.TypeMount, Name: rename(mountName), Namespace: namespace}
+	csrResource := apply.Resource{Type: apply.TypePKIIntermediateCertRequest, Name: rename(keyName + "-csr"), Namespace: namespace}
 
-	owned := selects(mountResource)
-	if selects(csrResource) != owned {
-		return false, fmt.Errorf("stack: select: %s %s and %s are selected apart; a mount is applied with its CA, its issuers and its configuration",
+	mountOwned, csrOwned := selects(mountResource), selects(csrResource)
+
+	switch {
+	case mountOwned && csrOwned:
+		return bootstrapBoth, nil
+	case !mountOwned && !csrOwned:
+		return bootstrapNone, nil
+	case !vendor:
+		// Anywhere but in a party's namespace the mount and its request
+		// are one unit.
+		return bootstrapNone, fmt.Errorf("stack: select: %s %s and %s are selected apart; a mount is applied with its CA, its issuers and its configuration",
 			csrResource.Type, csrResource.Name, mountResource.Name)
+	case mountOwned:
+		// In a party's namespace the server owner makes the mount...
+		return bootstrapMount, nil
+	default:
+		// ...and the party's own stack its key and request.
+		return bootstrapRequest, nil
 	}
-
-	return owned, nil
 }
+
+// bootstrapParts is what a run registers of a pending domain's phase A.
+type bootstrapParts int
+
+const (
+	bootstrapNone bootstrapParts = iota
+	bootstrapBoth
+	bootstrapMount
+	bootstrapRequest
+)
 
 // environmentKeys is the environments' public keys of one SSH mount, by
 // environment.

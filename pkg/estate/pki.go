@@ -39,7 +39,9 @@ type (
 	// yet: phase A of its ceremony, bootstrapped beside the apply under the
 	// names the apply adopts once it is signed (pkg/estate/stack).
 	PendingDomain struct {
-		TrustDomain      string `yaml:"trustDomain"`
+		TrustDomain string `yaml:"trustDomain"`
+		// Namespace is the domain's own namespace, empty for root.
+		Namespace        string `yaml:"namespace,omitempty"`
 		Mount            string `yaml:"mount"`
 		MountDescription string `yaml:"mountDescription"`
 		LeaseTTL         string `yaml:"leaseTtl"`
@@ -225,6 +227,7 @@ func configurePrivatePKI(desired *Desired, inputs *Inputs, clusters []Cluster) (
 
 		desired.PKI.Pending = append(desired.PKI.Pending, PendingDomain{
 			TrustDomain:      pending.Domain,
+			Namespace:        pending.Namespace,
 			Mount:            pending.Mount,
 			MountDescription: pending.MountDescription,
 			LeaseTTL:         pending.LeaseTTL,
@@ -237,12 +240,16 @@ func configurePrivatePKI(desired *Desired, inputs *Inputs, clusters []Cluster) (
 
 	logins := make(map[string][]builder.Workload, len(desired.Namespaces))
 
+	if err := configureVendors(desired, inputs, derivation); err != nil {
+		return nil, err
+	}
+
 	for i := range desired.Namespaces {
 		namespace := &desired.Namespaces[i]
 
 		for j := range derivation.Issuing {
 			authority := &derivation.Issuing[j]
-			if authority.Environment != namespace.Name {
+			if authority.Environment != namespace.Name || authority.Namespace != "" {
 				continue
 			}
 
@@ -271,6 +278,16 @@ func checkPKIDomains(in *PKI, desired *Desired, clusters map[string]Cluster) err
 	}
 
 	contract := in.Contract
+
+	// The estate's own private, origin and identity domains stay in root:
+	// the restore check, the identity CAs and the origin names rest on
+	// them there. A party's further domains take namespaces of their own.
+	for _, name := range []string{in.Private, in.Origin, in.Identity} {
+		if namespace := vendorOf(contract, name); namespace != "" {
+			return fmt.Errorf("estate: trust domain %s is the estate's own (PKI.Private, Origin or Identity) and stays in root, not in namespace %s",
+				name, namespace)
+		}
+	}
 
 	if err := checkPendingDomains(in); err != nil {
 		return err
@@ -502,6 +519,83 @@ func configureIssuingCA(inputs *Inputs, namespace *Namespace, authority *pki.Aut
 	})
 
 	return certManagerLogin(inputs, clusterIssuer, policy, in.AudiencePrefix+clusterIssuer, signs...), nil
+}
+
+// configureVendors declares the parties' namespaces of the domains that have
+// one: `<vendor>` for each, then `<vendor>/<env>` for each environment one
+// of its domains reaches, holding that environment's issuing CAs and the
+// cert-manager logins that sign through them.
+func configureVendors(desired *Desired, inputs *Inputs, derivation *pki.Derivation) error {
+	desired.vendorLogins = map[string][]builder.Workload{}
+
+	at := func(path string) *Namespace {
+		for i := range desired.Vendors {
+			if desired.Vendors[i].Name == path {
+				return &desired.Vendors[i]
+			}
+		}
+
+		desired.Vendors = append(desired.Vendors, Namespace{Name: path})
+
+		return &desired.Vendors[len(desired.Vendors)-1]
+	}
+
+	for _, name := range inputs.PKI.Contract.TrustDomainNames() {
+		if namespace := vendorOf(inputs.PKI.Contract, name); namespace != "" {
+			at(namespace)
+		}
+	}
+
+	for i := range derivation.Issuing {
+		authority := &derivation.Issuing[i]
+		if authority.Namespace == "" {
+			continue
+		}
+
+		path := authority.NamespacePath()
+
+		login, err := configureIssuingCA(inputs, at(path), authority)
+		if err != nil {
+			return err
+		}
+
+		desired.vendorLogins[path] = append(desired.vendorLogins[path], login)
+	}
+
+	// Each party's own namespace, then its children, in the order they
+	// were met: a child is made inside its parent, after it.
+	ordered := make([]Namespace, 0, len(desired.Vendors))
+
+	for i := range desired.Vendors {
+		parent := desired.Vendors[i].Name
+		if strings.Contains(parent, "/") {
+			continue
+		}
+
+		ordered = append(ordered, desired.Vendors[i])
+
+		for j := range desired.Vendors {
+			if strings.HasPrefix(desired.Vendors[j].Name, parent+"/") {
+				ordered = append(ordered, desired.Vendors[j])
+			}
+		}
+	}
+
+	desired.Vendors = ordered
+
+	return nil
+}
+
+func vendorOf(contract *pki.Contract, domain string) string {
+	if d := contract.DNSTrustDomain(domain); d != nil {
+		return d.Namespace
+	}
+
+	if d := contract.URITrustDomain(domain); d != nil {
+		return d.Namespace
+	}
+
+	return ""
 }
 
 // certManagerLogin is one role on the environment's cluster mount:

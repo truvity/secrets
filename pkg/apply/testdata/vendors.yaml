@@ -1,0 +1,94 @@
+# A party's namespaces, added to the model golden by the vendor tests: the
+# party's own (`vendor-a`), holding its domain intermediate and its admin
+# login, and its dev child (`vendor-a/dev`), holding an issuing CA signed by
+# that intermediate, the dev cluster's login and its policy.
+- name: vendor-a
+  pki:
+    - path: pki-vendor-a-private
+      description: vendor-a's domain intermediate
+      defaultLeaseTtl: 43800h
+      maxLeaseTtl: 43800h
+      defaultIssuer: vendor-a-int
+      issuers:
+        - name: vendor-a-int
+          commonName: vendor-a.example Intermediate CA
+          organization: Vendor A
+          keyCurve: P-384
+          ttl: 43800h
+          maxPathLength: 2
+          nameConstraints:
+            permittedDnsDomains:
+              - vendor-a.example
+          signedBy:
+            mount: pki-root
+            issuer: example-root
+  auth:
+    - path: jwt-admin
+      description: vendor-a's administrators, for its own stack
+      discoveryUrl: https://id.example.com
+      roles:
+        - name: admin
+          boundAudiences:
+            - openbao
+          userClaim: sub
+          groupsClaim: groups
+          policies:
+            - vendor-a-admin
+          ttl: 1h
+  policies:
+    - name: vendor-a-admin
+      rules:
+        - path: pki-vendor-a-private/*
+          capabilities: [create, read, update, delete, list]
+- name: vendor-a/dev
+  pki:
+    - path: pki-vendor-a
+      description: vendor-a's dev issuing CA
+      defaultLeaseTtl: 720h
+      maxLeaseTtl: 2160h
+      defaultIssuer: vendor-a-dev
+      issuers:
+        - name: vendor-a-dev
+          commonName: dev.vendor-a.example Issuing CA
+          organization: Vendor A
+          keyCurve: P-384
+          ttl: 26280h
+          maxPathLength: 1
+          nameConstraints:
+            permittedDnsDomains:
+              - dev.vendor-a.example
+          signedBy:
+            namespace: vendor-a
+            mount: pki-vendor-a-private
+            issuer: vendor-a-int
+      roles:
+        - name: vendor-a
+          issuer: vendor-a-dev
+          allowedDomains:
+            - dev.vendor-a.example
+          allowBareDomains: true
+          allowSubdomains: true
+          allowWildcardCertificates: false
+          server: true
+          client: true
+          keyCurve: P-384
+          ttl: 720h
+          maxTtl: 2160h
+  auth:
+    - path: jwt-dev
+      description: the dev cluster's ServiceAccount tokens
+      discoveryUrl: https://oidc.dev.example.com
+      roles:
+        - name: vendor-a-ca
+          boundAudiences:
+            - vault://vendor-a-ca
+          boundSubject: system:serviceaccount:cert-manager:openbao-issuer
+          userClaim: sub
+          policies:
+            - pki-vendor-a
+          ttl: 15m
+  policies:
+    - name: pki-vendor-a
+      rules:
+        - path: pki-vendor-a/sign/vendor-a
+          capabilities: [create, update]

@@ -211,3 +211,28 @@ func WithVendorRoot(t testing.TB, in *estate.Inputs) {
 		t.Fatalf("the contract with a vendor root does not validate: %v", err)
 	}
 }
+
+// VendorNamespace is the party namespace [WithVendorNamespace] gives the
+// vendor domain.
+const VendorNamespace = "vendor-a"
+
+// WithVendorNamespace puts the vendor domain ([WithVendorDomain], which it
+// must follow) in a party namespace of its own, and admits admins to it.
+func WithVendorNamespace(t testing.TB, in *estate.Inputs, admins ...string) {
+	t.Helper()
+
+	vendor := in.PKI.Contract.DNSTrustDomain(VendorDomain)
+	if vendor == nil {
+		t.Fatal("WithVendorNamespace needs WithVendorDomain first")
+	}
+
+	vendor.Namespace = VendorNamespace
+
+	if err := in.PKI.Contract.Validate(); err != nil {
+		t.Fatalf("the contract with a vendor namespace does not validate: %v", err)
+	}
+
+	if len(admins) > 0 {
+		in.PKI.VendorAdmins = map[string][]string{VendorNamespace: admins}
+	}
+}
