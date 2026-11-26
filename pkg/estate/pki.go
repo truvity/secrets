@@ -257,17 +257,20 @@ func configurePrivatePKI(desired *Desired, inputs *Inputs, clusters []Cluster) (
 
 // checkPKIDomains refuses trust-domain inputs the derivation would read
 // wrongly: the private and origin domains as one, a private domain that does
-// not reach every cluster, a pending private or origin domain, and a domain
-// that lists an environment the estate has no cluster or namespace for.
+// not reach every cluster, a pending private or origin domain, a pending
+// domain whose artifact is committed, and a DNS domain that lists an
+// environment the estate has no cluster or namespace for. A URI domain's
+// list is the URI domain's own business, as it always was: it may name an
+// environment this estate does not build.
 func checkPKIDomains(in *PKI, desired *Desired, clusters map[string]Cluster) error {
 	if in.Private == in.Origin {
 		return fmt.Errorf("estate: PKI.Private and PKI.Origin are both %q: they are two different trust domains", in.Private)
 	}
 
-	for _, name := range in.PendingDomains {
-		if name == in.Private || name == in.Origin {
-			return fmt.Errorf("estate: trust domain %s cannot be pending: the private and origin domains are signed before anything else", name)
-		}
+	contract := in.Contract
+
+	if err := checkPendingDomains(in); err != nil {
+		return err
 	}
 
 	known := make(map[string]bool, len(clusters)+len(desired.Namespaces))
@@ -278,8 +281,6 @@ func checkPKIDomains(in *PKI, desired *Desired, clusters map[string]Cluster) err
 	for i := range desired.Namespaces {
 		known[desired.Namespaces[i].Name] = true
 	}
-
-	contract := in.Contract
 
 	if private := contract.DNSTrustDomain(in.Private); private != nil {
 		names := make([]string, 0, len(clusters))
@@ -296,28 +297,54 @@ func checkPKIDomains(in *PKI, desired *Desired, clusters map[string]Cluster) err
 		}
 	}
 
-	lists := map[string][]string{}
-
 	for i := range contract.TrustDomains.DNS {
-		lists["dns "+contract.TrustDomains.DNS[i].Name] = contract.TrustDomains.DNS[i].Environments
-	}
+		domain := &contract.TrustDomains.DNS[i]
 
-	for i := range contract.TrustDomains.URI {
-		lists["uri "+contract.TrustDomains.URI[i].Name] = contract.TrustDomains.URI[i].Environments
-	}
-
-	domains := make([]string, 0, len(lists))
-	for domain := range lists {
-		domains = append(domains, domain)
-	}
-
-	slices.Sort(domains)
-
-	for _, domain := range domains {
-		for _, environment := range lists[domain] {
+		for _, environment := range domain.Environments {
 			if !known[environment] {
-				return fmt.Errorf("estate: trust domain %s lists environment %q, which is no cluster or namespace of the estate", domain, environment)
+				return fmt.Errorf("estate: dns trust domain %s lists environment %q, which is no cluster or namespace of the estate", domain.Name, environment)
 			}
+		}
+	}
+
+	return nil
+}
+
+// checkPendingDomains refuses a pending private or origin domain, and a
+// pending domain whose intermediate's artifact is committed: listing a
+// signed domain as pending would drop its issuing CAs, roles and logins.
+func checkPendingDomains(in *PKI) error {
+	if len(in.PendingDomains) == 0 {
+		return nil
+	}
+
+	generation, err := ActiveGeneration(in.Contract)
+	if err != nil {
+		return err
+	}
+
+	for _, name := range in.PendingDomains {
+		if name == in.Private || name == in.Origin {
+			return fmt.Errorf("estate: trust domain %s cannot be pending: the private and origin domains are signed before anything else", name)
+		}
+
+		// An unknown name is the derivation's to refuse.
+		if in.Contract.DNSTrustDomain(name) == nil {
+			continue
+		}
+
+		spec, err := in.Contract.DNSIntermediateSpec(name, generation.ID)
+		if err != nil {
+			return fmt.Errorf("estate: pending domain %s: %w", name, err)
+		}
+
+		signed, err := in.Contract.IntermediateSigned(spec)
+		if err != nil {
+			return fmt.Errorf("estate: pending domain %s: %w", name, err)
+		}
+
+		if signed {
+			return fmt.Errorf("estate: trust domain %s is pending, but its intermediate is committed at %s: drop it from PKI.PendingDomains", name, spec.ArtifactPath)
 		}
 	}
 

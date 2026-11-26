@@ -1,15 +1,18 @@
 package estate_test
 
 import (
+	"os"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"go.yaml.in/yaml/v3"
 
 	"github.com/truvity/secrets/pkg/estate"
 	"github.com/truvity/secrets/pkg/estate/internal/example"
+	"github.com/truvity/secrets/pkg/pki"
 )
 
 const vendor = example.VendorDomain
@@ -148,11 +151,7 @@ func TestTrustDomainInputRefusals(t *testing.T) {
 		}, "does not reach cluster beta"},
 		"a dns domain listing no cluster": {func(_ *testing.T, in *estate.Inputs) {
 			in.PKI.Contract.DNSTrustDomain(vendor).Environments = []string{"alpha", "nowhere"}
-		}, `trust domain dns vendor-a lists environment "nowhere"`},
-		"a uri domain listing no cluster": {func(_ *testing.T, in *estate.Inputs) {
-			identity := in.PKI.Contract.URITrustDomain(in.PKI.Identity)
-			identity.Environments = append(identity.Environments, "nowhere")
-		}, `trust domain uri identity lists environment "nowhere"`},
+		}, `dns trust domain vendor-a lists environment "nowhere"`},
 		"a pending private domain": {func(_ *testing.T, in *estate.Inputs) {
 			in.PKI.PendingDomains = []string{in.PKI.Private}
 		}, "trust domain private cannot be pending"},
@@ -169,6 +168,57 @@ func TestTrustDomainInputRefusals(t *testing.T) {
 			wantBuildError(t, in, tc.want)
 		})
 	}
+}
+
+// A URI domain's list may name an environment this estate does not build,
+// as at v0.51.0: a partial estate (one cluster of several) still builds.
+func TestURIDomainMayListEnvironmentsTheEstateDoesNotBuild(t *testing.T) {
+	in := example.Inputs(t, "testdata/contract.yaml")
+	identity := in.PKI.Contract.URITrustDomain(in.PKI.Identity)
+	identity.Environments = append(identity.Environments, "elsewhere")
+
+	if _, err := estate.Build(in); err != nil {
+		t.Fatalf("build: %v", err)
+	}
+}
+
+// A domain whose intermediate is committed is not pending: listing it would
+// drop its issuing CAs, roles and logins.
+func TestPendingDomainWithItsArtifactIsRefused(t *testing.T) {
+	raw, err := os.ReadFile("testdata/contract.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fsys := fstest.MapFS{"contract.yaml": {Data: raw}}
+
+	contract, err := pki.LoadFS(fsys, "contract.yaml", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	in := example.Inputs(t, "testdata/contract.yaml")
+	in.PKI.Contract = contract
+	example.WithVendorDomain(t, &in, "alpha")
+	in.PKI.PendingDomains = []string{vendor}
+
+	if _, err := estate.Build(in); err != nil {
+		t.Fatalf("build with no artifact: %v", err)
+	}
+
+	generation, err := estate.ActiveGeneration(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := contract.DNSIntermediateSpec(vendor, generation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fsys[spec.ArtifactPath] = &fstest.MapFile{Data: []byte("signed")}
+
+	wantBuildError(t, in, "trust domain vendor-a is pending, but its intermediate is committed")
 }
 
 // Where the origin domain does not reach, no origin zone is needed.

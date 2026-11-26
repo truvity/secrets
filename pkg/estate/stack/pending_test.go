@@ -265,3 +265,43 @@ func sorted(names []string) []string {
 
 	return out
 }
+
+// The bootstrap asks the selection about the names apply.Deploy gives the
+// same objects: the mount alone in root, "<namespace>-<mount>" below it, and
+// "<key>-csr" for the request.
+func TestSelectsBootstrapAsksForDeploysNames(t *testing.T) {
+	for namespace, wantMount := range map[string]string{"": "pki-vendor-a", "alpha": "alpha-pki-vendor-a"} {
+		var asked []apply.Resource
+
+		owned, err := selectsBootstrap(func(r apply.Resource) bool {
+			asked = append(asked, r)
+
+			return true
+		}, func(name string) string { return name }, namespace, "pki-vendor-a", "example-vendor-a-2026-09")
+		if err != nil || !owned {
+			t.Fatalf("selectsBootstrap(%q) = %v, %v", namespace, owned, err)
+		}
+
+		want := []apply.Resource{
+			{Type: apply.TypeMount, Name: wantMount},
+			{Type: apply.TypePKIIntermediateCertRequest, Name: "example-vendor-a-2026-09-csr"},
+		}
+		if !slices.Equal(asked, want) {
+			t.Errorf("namespace %q: asked %v, want %v", namespace, asked, want)
+		}
+	}
+}
+
+// Two trust domains' requests under one output are refused.
+func TestDeployRefusesASharedRequestOutput(t *testing.T) {
+	desired := vendorEstate(t, true)
+	opts := vendorOptions(&fakeChains{})
+	opts.DomainCSROutputs["vendor-a"] = "privateCsr"
+
+	err := pulumi.RunErr(func(c *pulumi.Context) error {
+		return Deploy(c, &desired, opts)
+	}, pulumi.WithMocks("example", "openbao-config", &recorder{}))
+	if err == nil || !strings.Contains(err.Error(), `trust domains private and vendor-a share the request output "privateCsr"`) {
+		t.Errorf("Deploy() = %v, want the shared output refused", err)
+	}
+}

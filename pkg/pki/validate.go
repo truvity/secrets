@@ -57,6 +57,10 @@ func (c *Contract) Validate() error {
 		return err
 	}
 
+	if err := c.TrustDomains.rolesApart(); err != nil {
+		return err
+	}
+
 	for i := range c.TrustDomains.URI {
 		domain := &c.TrustDomains.URI[i]
 		if err := domain.validate(c.Global, generationLifetimes); err != nil {
@@ -309,6 +313,10 @@ func (d *DNSTrustDomain) validate(global Global, generations map[string]generati
 		return fmt.Errorf("pki: %s.suffix is required", path)
 	}
 
+	if !isDNSName(d.Suffix) {
+		return fmt.Errorf("pki: %s.suffix %q is not a lower-case DNS name", path, d.Suffix)
+	}
+
 	rootLifetime, rootMaxPathLen, err := checkGenerationRef(path, d.RootGeneration, generations)
 	if err != nil {
 		return err
@@ -346,23 +354,21 @@ func (d *DNSTrustDomain) validate(global Global, generations map[string]generati
 }
 
 // dnsApart refuses two DNS trust domains whose names overlap: a suffix, or
-// a name-constraint entry, of one equal to or under a suffix or entry of the
-// other. Each domain's chain then signs only under its own names, and no
-// name is under two domains' roles at once.
+// a name-constraint entry, of one equal to, under or above a suffix or entry
+// of the other. With [TrustDomains.rolesApart] and the derivation's check of
+// catalog names, no role of one domain signs a name under another's. The
+// chain of an unconstrained domain carries no constraint at all: its roles
+// are its only fence.
 func (t TrustDomains) dnsApart() error {
-	names := func(d *DNSTrustDomain) []string {
-		return append([]string{d.Suffix}, d.DomainIntermediate.PermittedDNSDomains...)
-	}
-
 	for i := range t.DNS {
 		a := &t.DNS[i]
 
 		for j := i + 1; j < len(t.DNS); j++ {
 			b := &t.DNS[j]
 
-			for _, x := range names(a) {
-				for _, y := range names(b) {
-					if strings.EqualFold(x, y) || isNameUnderDomain(x, y) || isNameUnderDomain(y, x) {
+			for _, x := range a.names() {
+				for _, y := range b.names() {
+					if namesNest(x, y) {
 						return fmt.Errorf("pki: trust domains %s and %s overlap: %q and %q; each dns domain's suffix and name constraint stay apart from every other's",
 							a.Name, b.Name, x, y)
 					}
@@ -372,6 +378,66 @@ func (t TrustDomains) dnsApart() error {
 	}
 
 	return nil
+}
+
+// rolesApart refuses a static role pattern of one DNS domain that is equal
+// to, under or above a suffix or constraint entry of another. A constrained
+// domain's patterns already sit inside its own constraint; this is the fence
+// for an unconstrained one, whose patterns need not sit under its own suffix
+// (an origin domain may publish names in several zones).
+func (t TrustDomains) rolesApart() error {
+	for i := range t.DNS {
+		domain := &t.DNS[i]
+
+		for r := range domain.Roles {
+			role := &domain.Roles[r]
+			if role.Names.Source != NameSourceStatic {
+				continue
+			}
+
+			for _, pattern := range role.Names.Patterns {
+				if other, name, nests := t.otherDomainName(domain.Name, pattern); nests {
+					return fmt.Errorf("pki: trustDomains.dns[%s].roles[%s] pattern %q nests with trust domain %s's %q: a role signs no name of another dns domain",
+						domain.Name, role.Name, pattern, other, name)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// otherDomainName reports the first DNS domain other than own, and its
+// suffix or constraint entry, that name (a leading "*." dropped) is equal
+// to, under or above.
+func (t TrustDomains) otherDomainName(own, name string) (string, string, bool) {
+	name = strings.TrimPrefix(name, "*.")
+
+	for i := range t.DNS {
+		other := &t.DNS[i]
+		if other.Name == own {
+			continue
+		}
+
+		for _, theirs := range other.names() {
+			if namesNest(name, theirs) {
+				return other.Name, theirs, true
+			}
+		}
+	}
+
+	return "", "", false
+}
+
+// names is the domain's suffix and its name-constraint entries.
+func (d *DNSTrustDomain) names() []string {
+	return append([]string{d.Suffix}, d.DomainIntermediate.PermittedDNSDomains...)
+}
+
+// namesNest reports whether two DNS names are equal or one is under the
+// other, ignoring case.
+func namesNest(a, b string) bool {
+	return strings.EqualFold(a, b) || isNameUnderDomain(a, b) || isNameUnderDomain(b, a)
 }
 
 // validateEnvironments checks a trust domain's environments list: bare
@@ -436,6 +502,15 @@ func (d DomainIntermediate) validate(path string, global Global, suffix string, 
 	for i, constraint := range d.PermittedDNSDomains {
 		if !isDNSName(constraint) {
 			return fmt.Errorf("pki: %s.permittedDnsDomains[%d] %q is not a DNS domain", path, i, constraint)
+		}
+
+		// An entry beside the suffix lies outside it: one under the suffix
+		// would let every environment's issuing CA sign that part of
+		// another environment's zone, and one above it would widen the
+		// domain past its own suffix.
+		if !strings.EqualFold(constraint, suffix) && (isNameUnderDomain(constraint, suffix) || isNameUnderDomain(suffix, constraint)) {
+			return fmt.Errorf("pki: %s.permittedDnsDomains[%d] %q nests with the domain's suffix %q: an entry beside the suffix lies outside it",
+				path, i, constraint, suffix)
 		}
 
 		key := strings.ToLower(constraint)
