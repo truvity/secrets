@@ -74,16 +74,20 @@ func (a *applier) pkiMount(s *scope, desired *model.PKIMount) error {
 		args.Description = pulumi.String(desired.Description)
 	}
 
-	name, owned, err := a.pkiUnit(s, desired)
+	name, owned, contents, err := a.pkiUnit(s, desired)
 	if err != nil {
 		return err
 	}
 
-	mount := &pkiMount{ref: MountRef{Namespace: s.namespace.Name, Path: desired.Path}, path: pulumi.String(desired.Path), owned: owned}
+	// mount.owned is whether this run writes the mount's CA, issuers and
+	// configuration: the mount's own ownership, but in a party's
+	// namespace, where the contents are selected apart from it.
+	mount := &pkiMount{ref: MountRef{Namespace: s.namespace.Name, Path: desired.Path}, path: pulumi.String(desired.Path), owned: contents}
 
 	// A mount another stack owns registers nothing of its own here --
-	// neither its issuers nor its configuration -- but its roles still
-	// can, on its declared path.
+	// neither its issuers nor its configuration, unless they are this
+	// run's in a party's namespace -- but its roles still can, on its
+	// declared path.
 	if owned {
 		created, err := vault.NewMount(a.c, name, args, authority(s.base, s.created)...)
 		if err != nil {
@@ -271,7 +275,7 @@ func (a *applier) sign(
 	}
 
 	if desired.SignedBy.Namespace != "" {
-		args.Namespace = pulumi.String(desired.SignedBy.Namespace)
+		args.Namespace = a.namespaceArg(desired.SignedBy.Namespace)
 	}
 
 	// A name-constraints extension only where the model declares one: an
@@ -390,7 +394,7 @@ func (a *applier) pinAndMaintain(s *scope, mount *pkiMount, issuer *pkiIssuer) e
 // everything it does not allow spelled out rather than left to a default.
 func (a *applier) pkiRole(s *scope, mount *model.PKIMount, role *model.PKIRole) error {
 	name := a.name(PKIRoleResourceName(role.Issuer, role.Name))
-	if !a.owns(TypePKIRole, name) {
+	if !a.owns(s.namespace.Name, TypePKIRole, name) {
 		return nil
 	}
 
@@ -489,7 +493,7 @@ func (a *applier) credentialRoles(s *scope, mount *model.PKIMount, accessors map
 		role := &mount.CredentialRoles[i]
 
 		name := a.name(PKICredentialRoleResourceName(role.Issuer, role.Name))
-		if !a.owns(TypePKIRole, name) {
+		if !a.owns(s.namespace.Name, TypePKIRole, name) {
 			continue
 		}
 

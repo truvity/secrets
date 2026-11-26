@@ -28,15 +28,24 @@ func NewProvider(c *pulumi.Context, name, address string, login Login, opts ...p
 		return nil, fmt.Errorf("apply: the login token is empty")
 	}
 
+	jwt := &vault.ProviderAuthLoginJwtArgs{
+		Mount:            pulumi.String(login.Mount),
+		Role:             pulumi.String(login.Role),
+		Jwt:              pulumi.ToSecret(pulumi.String(token)).(pulumi.StringOutput),
+		UseRootNamespace: pulumi.Bool(true),
+	}
+
 	args := &vault.ProviderArgs{
 		Address:        pulumi.String(address),
 		SkipChildToken: pulumi.Bool(true),
-		AuthLoginJwt: &vault.ProviderAuthLoginJwtArgs{
-			Mount:            pulumi.String(login.Mount),
-			Role:             pulumi.String(login.Role),
-			Jwt:              pulumi.ToSecret(pulumi.String(token)).(pulumi.StringOutput),
-			UseRootNamespace: pulumi.Bool(true),
-		},
+		AuthLoginJwt:   jwt,
+	}
+
+	// A login below root logs in, and works, in its own namespace.
+	if login.Namespace != "" {
+		args.Namespace = pulumi.String(login.Namespace)
+		jwt.UseRootNamespace = nil
+		jwt.Namespace = pulumi.String(login.Namespace)
 	}
 
 	if login.CACertFile != "" {

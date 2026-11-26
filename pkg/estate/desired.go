@@ -43,6 +43,14 @@ type (
 		RootWorkloads Namespace `yaml:"rootWorkloads"`
 		// Namespaces are the environments, sorted by name.
 		Namespaces []Namespace `yaml:"namespaces"`
+		// Vendors are the parties' namespaces (ADR 0008): `<vendor>`, then
+		// each `<vendor>/<env>` holding that environment's issuing CAs of
+		// the party's domains. Empty, and left out, with no such domain.
+		Vendors []Namespace `yaml:"vendors,omitempty"`
+
+		// vendorLogins are the cert-manager logins of each party's
+		// per-environment namespace, by its path.
+		vendorLogins map[string][]builder.Workload
 	}
 
 	// Namespace is one namespace and everything inside it.

@@ -253,6 +253,14 @@ type (
 		// the contract's one active generation ([Contract.Validate] fills it
 		// in, in place); with several active generations it is required.
 		RootGeneration string `yaml:"rootGeneration"`
+		// Namespace is the server namespace the domain lives in: its
+		// intermediate in `<namespace>/` itself, and each environment's
+		// issuing CA, roles and cert-manager login in `<namespace>/<env>`.
+		// Empty is the root namespace for the intermediate and the
+		// environment's own namespace for its issuing CA, as before the
+		// field existed. One party's namespace holds its domains alone,
+		// so a token scoped to it reaches no other party's.
+		Namespace string `yaml:"namespace,omitempty"`
 		// RequireTrusted marks a domain whose active generation must
 		// always appear in [Migration.TrustedGenerations]: a leaf this
 		// domain issues is worthless to whatever verifies it (a
@@ -367,6 +375,8 @@ type (
 		// that signs this domain's intermediate and its root-signed
 		// environment CAs, the one active generation when left empty.
 		RootGeneration string `yaml:"rootGeneration"`
+		// Namespace is as [DNSTrustDomain.Namespace].
+		Namespace string `yaml:"namespace,omitempty"`
 		// DomainIntermediate is the shared intermediate every environment
 		// without its own root-signed CA is issued under. It is OPTIONAL:
 		// a domain whose every environment has its own root-signed CA

@@ -2,6 +2,7 @@ package apply
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/truvity/secrets/pkg/model"
 )
@@ -36,6 +37,7 @@ const (
 	TypeSSHRole                    = "vault:ssh/secretBackendRole:SecretBackendRole"
 	selectRefusalPrefix            = "apply: select"
 	unitMountRule                  = "a mount is applied with its CA, its issuers and its configuration"
+	unitContentsRule               = "in a party's namespace a mount's CA, issuers and configuration are applied together"
 	unitAuthRule                   = "an AWS auth mount is applied with its client configuration"
 	unitGroupRule                  = "a group is applied with its alias"
 	unitKVRule                     = "a KV mount is applied with its canary"
@@ -43,27 +45,83 @@ const (
 
 type (
 	// Resource names one resource Deploy would register: its Pulumi type
-	// token (the Type constants) and its logical name, after Rename.
+	// token (the Type constants), its logical name after Rename, and the
+	// server namespace it configures ("" is root; a Namespace resource's
+	// is the namespace it creates). A selection that ignores Namespace
+	// selects exactly what it did before the field existed.
 	Resource struct {
-		Type string
-		Name string
+		Type      string
+		Name      string
+		Namespace string
 	}
 )
 
 // owns reports whether this Deploy registers a resource: every one when
 // Options.Select is nil.
-func (a *applier) owns(typ, name string) bool {
+func (a *applier) owns(namespace, typ, name string) bool {
+	// A login below root never registers outside its namespace.
+	if base := a.opts.Login.Namespace; base != "" && !within(namespace, base) {
+		return false
+	}
+
 	if a.opts.Select == nil {
 		return true
 	}
 
-	return a.opts.Select(Resource{Type: typ, Name: name})
+	return a.opts.Select(Resource{Type: typ, Name: name, Namespace: namespace})
+}
+
+// within reports whether namespace is base or below it.
+func within(namespace, base string) bool {
+	return namespace == base || strings.HasPrefix(namespace, base+"/")
+}
+
+// pkiContents are the types inside a PKI mount: its CA keys, requests,
+// imports and issuers, its configuration and its roles -- everything a
+// party's own stack writes into the mounts the server owner made for it.
+var pkiContents = map[string]bool{
+	TypePKIRootCert:                true,
+	TypePKIIntermediateCertRequest: true,
+	TypePKIIntermediateSetSigned:   true,
+	TypePKIIssuer:                  true,
+	TypePKIRootSignIntermediate:    true,
+	TypePKIConfigIssuers:           true,
+	TypePKIConfigURLs:              true,
+	TypePKICRLConfig:               true,
+	TypePKIAutoTidy:                true,
+	TypePKIRole:                    true,
+}
+
+// SelectVendor is the selection of a party's own stack (ADR 0008):
+// everything inside the PKI mounts of the party's namespace and its
+// per-environment children -- the domain intermediate's request and
+// import, the issuers, the configuration, the roles and each issuing CA's
+// contents -- and nothing else. Never a Namespace, a mount or an auth
+// mount (the server owner makes those, and the party's token may not
+// write `sys/`), and never a resource in root or in another party's
+// namespace. With [Login.Namespace] at the party's namespace, the run
+// needs nothing above it.
+func SelectVendor(vendor string) func(Resource) bool {
+	return func(r Resource) bool {
+		return vendor != "" && within(r.Namespace, vendor) && pkiContents[r.Type]
+	}
+}
+
+// SelectVendorMounts is the server owner's half of a party's namespace:
+// everything in it that [SelectVendor] leaves out -- the namespaces
+// themselves, the empty PKI mounts, the auth mounts with their roles, the
+// policies and the groups. Together the two select every resource of the
+// party's namespace exactly once.
+func SelectVendorMounts(vendor string) func(Resource) bool {
+	return func(r Resource) bool {
+		return vendor != "" && within(r.Namespace, vendor) && !pkiContents[r.Type]
+	}
 }
 
 // together refuses a selection that splits a unit: the resource must be
 // owned exactly when the unit's head (unitOwned) is.
-func (a *applier) together(typ, name string, unitOwned bool, head, rule string) error {
-	if a.owns(typ, name) == unitOwned {
+func (a *applier) together(namespace, typ, name string, unitOwned bool, head, rule string) error {
+	if a.owns(namespace, typ, name) == unitOwned {
 		return nil
 	}
 
@@ -84,7 +142,7 @@ func (a *applier) checkSelection() error {
 		s := &scope{namespace: namespace, label: namespace.Label()}
 
 		for i := range namespace.PKI {
-			if _, _, err := a.pkiUnit(s, &namespace.PKI[i]); err != nil {
+			if _, _, _, err := a.pkiUnit(s, &namespace.PKI[i]); err != nil {
 				return err
 			}
 		}
@@ -95,7 +153,7 @@ func (a *applier) checkSelection() error {
 			ps := &scope{namespace: &model.Namespace{Name: path}, label: path}
 
 			for j := range project.PKI {
-				if _, _, err := a.pkiUnit(ps, &project.PKI[j]); err != nil {
+				if _, _, _, err := a.pkiUnit(ps, &project.PKI[j]); err != nil {
 					return err
 				}
 			}
@@ -129,13 +187,13 @@ func (a *applier) checkSelection() error {
 		}
 
 		for i := range namespace.SSH {
-			if _, _, _, err := a.sshUnit(mountName(s, namespace.SSH[i].Path)); err != nil {
+			if _, _, _, err := a.sshUnit(s.namespace.Name, mountName(s, namespace.SSH[i].Path)); err != nil {
 				return err
 			}
 		}
 
 		for i := range namespace.SSHHost {
-			if _, _, _, err := a.sshUnit(mountName(s, namespace.SSHHost[i].Path)); err != nil {
+			if _, _, _, err := a.sshUnit(s.namespace.Name, mountName(s, namespace.SSHHost[i].Path)); err != nil {
 				return err
 			}
 		}
@@ -144,22 +202,28 @@ func (a *applier) checkSelection() error {
 	return nil
 }
 
-// pkiUnit is a PKI mount's logical name and whether this run owns it, after
-// checking that its issuers, its pinned default and its maintenance follow
-// it.
-func (a *applier) pkiUnit(s *scope, desired *model.PKIMount) (string, bool, error) {
+// pkiUnit is a PKI mount's logical name, whether this run owns the mount,
+// and whether it owns the mount's contents, after checking that its
+// issuers, its pinned default and its maintenance follow them.
+//
+// The mount and its contents are one unit everywhere but in a party's
+// namespace ([model.Desired.Vendors]): there the server owner makes the
+// empty mount and the party's own stack writes what is inside it
+// ([SelectVendor], [SelectVendorMounts]), so the contents are a unit of
+// their own, headed by the mount's first content resource.
+func (a *applier) pkiUnit(s *scope, desired *model.PKIMount) (string, bool, bool, error) {
 	head := mountName(s, desired.Path)
 	name := a.name(head)
-	owned := a.owns(TypeMount, name)
+	owned := a.owns(s.namespace.Name, TypeMount, name)
 
 	var members []Resource
 
 	if desired.DefaultIssuer != "" {
 		members = append(members,
-			Resource{TypePKIConfigIssuers, a.name(head + "-default")},
-			Resource{TypePKIConfigURLs, a.name(head + "-urls")},
-			Resource{TypePKICRLConfig, a.name(head + "-crl")},
-			Resource{TypePKIAutoTidy, a.name(head + "-auto-tidy")},
+			Resource{Type: TypePKIConfigIssuers, Name: a.name(head + "-default")},
+			Resource{Type: TypePKIConfigURLs, Name: a.name(head + "-urls")},
+			Resource{Type: TypePKICRLConfig, Name: a.name(head + "-crl")},
+			Resource{Type: TypePKIAutoTidy, Name: a.name(head + "-auto-tidy")},
 		)
 	}
 
@@ -168,37 +232,49 @@ func (a *applier) pkiUnit(s *scope, desired *model.PKIMount) (string, bool, erro
 
 		switch {
 		case issuer.SelfSigned:
-			members = append(members, Resource{TypePKIRootCert, a.name(issuer.Name + "-certificate")})
+			members = append(members, Resource{Type: TypePKIRootCert, Name: a.name(issuer.Name + "-certificate")})
 		default:
 			members = append(members,
-				Resource{TypePKIIntermediateCertRequest, a.name(issuer.Name + "-csr")},
-				Resource{TypePKIIntermediateSetSigned, a.name(issuer.Name + "-import")},
-				Resource{TypePKIIssuer, a.name(issuer.Name + "-issuer")},
+				Resource{Type: TypePKIIntermediateCertRequest, Name: a.name(issuer.Name + "-csr")},
+				Resource{Type: TypePKIIntermediateSetSigned, Name: a.name(issuer.Name + "-import")},
+				Resource{Type: TypePKIIssuer, Name: a.name(issuer.Name + "-issuer")},
 			)
 
 			if !issuer.External {
-				members = append(members, Resource{TypePKIRootSignIntermediate, a.name(issuer.Name + "-signed")})
+				members = append(members, Resource{Type: TypePKIRootSignIntermediate, Name: a.name(issuer.Name + "-signed")})
 			}
 		}
 	}
 
-	for _, member := range members {
-		if err := a.together(member.Type, member.Name, owned, name, unitMountRule); err != nil {
-			return "", false, err
+	if !a.desired.Vendor(s.namespace.Name) || len(members) == 0 {
+		for _, member := range members {
+			if err := a.together(s.namespace.Name, member.Type, member.Name, owned, name, unitMountRule); err != nil {
+				return "", false, false, err
+			}
+		}
+
+		return name, owned, owned, nil
+	}
+
+	contents := a.owns(s.namespace.Name, members[0].Type, members[0].Name)
+
+	for _, member := range members[1:] {
+		if err := a.together(s.namespace.Name, member.Type, member.Name, contents, members[0].Name, unitContentsRule); err != nil {
+			return "", false, false, err
 		}
 	}
 
-	return name, owned, nil
+	return name, owned, contents, nil
 }
 
 // kvUnit is a KV mount's logical name and whether this run owns it, after
 // checking that its canary follows it.
 func (a *applier) kvUnit(s *scope, desired *model.KVMount) (string, bool, error) {
 	name := a.name(mountName(s, desired.Path))
-	owned := a.owns(TypeMount, name)
+	owned := a.owns(s.namespace.Name, TypeMount, name)
 
 	if desired.Canary != "" {
-		if err := a.together(TypeKVSecret, a.name(s.label+"-"+desired.Canary), owned, name, unitKVRule); err != nil {
+		if err := a.together(s.namespace.Name, TypeKVSecret, a.name(s.label+"-"+desired.Canary), owned, name, unitKVRule); err != nil {
 			return "", false, err
 		}
 	}
@@ -217,9 +293,9 @@ func (a *applier) groupUnit(s *scope, group *model.Group, door string) (string, 
 
 	groupName := a.name(s.label + "-group-" + resourceName(group.Name) + suffix)
 	aliasName := a.name(s.label + "-alias-" + resourceName(group.Name) + suffix)
-	owned := a.owns(TypeGroup, groupName)
+	owned := a.owns(s.namespace.Name, TypeGroup, groupName)
 
-	if err := a.together(TypeGroupAlias, aliasName, owned, groupName, unitGroupRule); err != nil {
+	if err := a.together(s.namespace.Name, TypeGroupAlias, aliasName, owned, groupName, unitGroupRule); err != nil {
 		return "", "", false, err
 	}
 
@@ -229,11 +305,11 @@ func (a *applier) groupUnit(s *scope, group *model.Group, door string) (string, 
 // sshUnit is an SSH mount's and its CA's names, from the mount's logical
 // name before Rename, and whether this run owns them, after checking that
 // the CA follows the mount.
-func (a *applier) sshUnit(name string) (string, string, bool, error) {
+func (a *applier) sshUnit(namespace, name string) (string, string, bool, error) {
 	mountName, caName := a.name(name), a.name(name+"-ca")
-	owned := a.owns(TypeMount, mountName)
+	owned := a.owns(namespace, TypeMount, mountName)
 
-	if err := a.together(TypeSSHCA, caName, owned, mountName, unitMountRule); err != nil {
+	if err := a.together(namespace, TypeSSHCA, caName, owned, mountName, unitMountRule); err != nil {
 		return "", "", false, err
 	}
 
@@ -252,8 +328,8 @@ func (a *applier) awsUnit(s *scope, desired *model.AWSAuthMount) (string, string
 		mountType = TypeEndpoint
 	}
 
-	owned := a.owns(mountType, mountName)
-	if err := a.together(TypeAWSAuthBackendClient, clientName, owned, mountName, unitAuthRule); err != nil {
+	owned := a.owns(s.namespace.Name, mountType, mountName)
+	if err := a.together(s.namespace.Name, TypeAWSAuthBackendClient, clientName, owned, mountName, unitAuthRule); err != nil {
 		return "", "", false, err
 	}
 

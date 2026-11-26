@@ -277,14 +277,14 @@ func TestSelectsBootstrapAsksForDeploysNames(t *testing.T) {
 			asked = append(asked, r)
 
 			return true
-		}, func(name string) string { return name }, namespace, "pki-vendor-a", "example-vendor-a-2026-09")
-		if err != nil || !owned {
+		}, func(name string) string { return name }, namespace, "pki-vendor-a", "example-vendor-a-2026-09", false)
+		if err != nil || owned != bootstrapBoth {
 			t.Fatalf("selectsBootstrap(%q) = %v, %v", namespace, owned, err)
 		}
 
 		want := []apply.Resource{
-			{Type: apply.TypeMount, Name: wantMount},
-			{Type: apply.TypePKIIntermediateCertRequest, Name: "example-vendor-a-2026-09-csr"},
+			{Type: apply.TypeMount, Name: wantMount, Namespace: namespace},
+			{Type: apply.TypePKIIntermediateCertRequest, Name: "example-vendor-a-2026-09-csr", Namespace: namespace},
 		}
 		if !slices.Equal(asked, want) {
 			t.Errorf("namespace %q: asked %v, want %v", namespace, asked, want)
@@ -303,5 +303,29 @@ func TestDeployRefusesASharedRequestOutput(t *testing.T) {
 	}, pulumi.WithMocks("example", "openbao-config", &recorder{}))
 	if err == nil || !strings.Contains(err.Error(), `trust domains private and vendor-a share the request output "privateCsr"`) {
 		t.Errorf("Deploy() = %v, want the shared output refused", err)
+	}
+}
+
+// In a party's namespace a pending domain's mount is the server owner's and
+// its request the party's; anywhere else the two stay one unit.
+func TestAPendingVendorDomainIsSplitBetweenTheOwnerAndTheParty(t *testing.T) {
+	keep := func(name string) string { return name }
+	mountOnly := func(r apply.Resource) bool { return r.Type == apply.TypeMount }
+	requestOnly := func(r apply.Resource) bool { return r.Type != apply.TypeMount }
+
+	parts, err := selectsBootstrap(mountOnly, keep, "vendor-a", "pki-vendor-a-private", "vendor-a-int", true)
+	if err != nil || parts != bootstrapMount {
+		t.Errorf("the owner's half = %v, %v; want the mount alone", parts, err)
+	}
+
+	parts, err = selectsBootstrap(requestOnly, keep, "vendor-a", "pki-vendor-a-private", "vendor-a-int", true)
+	if err != nil || parts != bootstrapRequest {
+		t.Errorf("the party's half = %v, %v; want the request alone", parts, err)
+	}
+
+	for _, namespace := range []string{"", "alpha"} {
+		if _, err := selectsBootstrap(mountOnly, keep, namespace, "pki-vendor-a", "example-vendor-a-2026-09", false); err == nil {
+			t.Errorf("namespace %q: a split outside a party's namespace was accepted", namespace)
+		}
 	}
 }

@@ -42,6 +42,13 @@ type (
 		Root Namespace `yaml:"root"`
 		// Namespaces are the environments, each one level below root.
 		Namespaces []Namespace `yaml:"namespaces"`
+		// Vendors are the parties' own namespaces: a party's namespace one
+		// level below root (`<vendor>`), and its per-environment children
+		// (`<vendor>/<env>`), each listed after its parent. A party's trust
+		// domains live in them, so a token scoped to one party's namespace
+		// reaches no other party's (ADR 0008). Empty on a server with no
+		// such party, and then nothing is registered for it.
+		Vendors []Namespace `yaml:"vendors,omitempty"`
 		// Plugins are the server's plugin catalog: entries every namespace
 		// sits below, applied once and before any of them (Plugin's own
 		// doc comment). Empty on a server with no external plugin -- every
@@ -63,7 +70,9 @@ type (
 
 	// Namespace is one OpenBAO namespace and everything inside it.
 	Namespace struct {
-		// Name is empty for root, and a plain name (no `/`) otherwise.
+		// Name is empty for root, and a plain name (no `/`) otherwise --
+		// but for a party's per-environment namespace in
+		// [Desired.Vendors], which is `<vendor>/<env>`.
 		Name    string         `yaml:"name,omitempty"`
 		KV      []KVMount      `yaml:"kv,omitempty"`
 		PKI     []PKIMount     `yaml:"pki,omitempty"`
@@ -140,6 +149,10 @@ func (d *Desired) Validate() error {
 		}
 	}
 
+	if err := d.validateVendors(seen); err != nil {
+		return err
+	}
+
 	if err := d.validateSigners(); err != nil {
 		return err
 	}
@@ -179,14 +192,84 @@ func (d *Desired) hasGroups() bool {
 // which it registers them, and the order in which an issuer's signer must
 // already be declared.
 func (d *Desired) Applied() []*Namespace {
-	out := make([]*Namespace, 0, len(d.Namespaces)+1)
+	out := make([]*Namespace, 0, len(d.Namespaces)+len(d.Vendors)+1)
 	out = append(out, &d.Root)
 
 	for i := range d.Namespaces {
 		out = append(out, &d.Namespaces[i])
 	}
 
+	for i := range d.Vendors {
+		out = append(out, &d.Vendors[i])
+	}
+
 	return out
+}
+
+// VendorOf is the party a namespace path belongs to: its first segment
+// when the path is one of Vendors, "" for root and an environment.
+func (d *Desired) VendorOf(path string) string {
+	for i := range d.Vendors {
+		if d.Vendors[i].Name == path {
+			vendor, _, _ := strings.Cut(path, "/")
+
+			return vendor
+		}
+	}
+
+	return ""
+}
+
+// Vendor reports whether path is a party's namespace or one of its
+// per-environment children.
+func (d *Desired) Vendor(path string) bool {
+	return d.VendorOf(path) != ""
+}
+
+// validateVendors refuses a party namespace that is not `<vendor>` or
+// `<vendor>/<env>` of plain names, one declared twice or listed before its
+// parent, one named like an environment, and one holding projects.
+func (d *Desired) validateVendors(environments map[string]bool) error {
+	seen := map[string]bool{}
+
+	for i := range d.Vendors {
+		namespace := &d.Vendors[i]
+
+		parent, child, nested := strings.Cut(namespace.Name, "/")
+		if err := validateNamespaceSegment(parent); err != nil {
+			return fmt.Errorf("model: vendor namespace %w", err)
+		}
+
+		if nested {
+			if err := validateNamespaceSegment(child); err != nil {
+				return fmt.Errorf("model: vendor namespace %s: child %w", parent, err)
+			}
+
+			if !seen[parent] {
+				return fmt.Errorf("model: vendor namespace %s is listed before its parent %s", namespace.Name, parent)
+			}
+		}
+
+		if environments[parent] {
+			return fmt.Errorf("model: vendor namespace %s is also an environment's name", parent)
+		}
+
+		if seen[namespace.Name] {
+			return fmt.Errorf("model: namespace %q is declared twice", namespace.Name)
+		}
+
+		seen[namespace.Name] = true
+
+		if len(namespace.Projects) > 0 {
+			return fmt.Errorf("model: vendor namespace %s holds a project; a project nests below an environment (ADR 0001)", namespace.Name)
+		}
+
+		if err := namespace.Validate(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Validate refuses a namespace that declares one name twice -- a mount

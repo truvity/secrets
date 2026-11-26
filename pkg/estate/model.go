@@ -3,6 +3,7 @@ package estate
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/truvity/secrets/pkg/model"
 )
@@ -22,18 +23,109 @@ func (d *Desired) Model() (*model.Desired, error) {
 	out := *d.built.Model
 	out.Namespaces = slices.Clone(out.Namespaces)
 
+	vendors, err := d.vendorNamespaces()
+	if err != nil {
+		return nil, err
+	}
+
+	out.Vendors = vendors
+
 	// The contract's authorities are the server's PKI: the domain
 	// intermediates in root, each environment's issuing CAs in its
-	// namespace. The library derives them, Apply places them.
+	// namespace -- or a party's domains in the party's namespaces. The
+	// library derives them, Apply places them.
 	if err := d.derivation.Apply(&out); err != nil {
 		return nil, err
 	}
+
+	d.vendorAdmins(&out)
 
 	if err := out.Validate(); err != nil {
 		return nil, err
 	}
 
 	return &out, nil
+}
+
+// vendorNamespaces are the parties' namespaces as the model holds them,
+// before the PKI is placed in them: each `<vendor>/<env>` holds the
+// environment's cluster mount, carrying the cert-manager logins of the
+// party's issuing CAs there and their policies. The mount trusts the
+// cluster's own issuer, as the environment's does.
+func (d *Desired) vendorNamespaces() ([]model.Namespace, error) {
+	out := make([]model.Namespace, 0, len(d.Vendors))
+
+	for i := range d.Vendors {
+		view := &d.Vendors[i]
+		namespace := model.Namespace{Name: view.Name}
+
+		if _, env, nested := strings.Cut(view.Name, "/"); nested {
+			at := slices.IndexFunc(d.in.Clusters, func(c Cluster) bool { return c.Name == env })
+			if at < 0 {
+				return nil, fmt.Errorf("estate: party namespace %s has no cluster %s", view.Name, env)
+			}
+
+			trust := clusterTrust(d.in, d.in.Names.ClusterMountPrefix+env, d.in.Clusters[at].Issuer)
+			trust.Workloads = slices.Clone(d.vendorLogins[view.Name])
+
+			mount, policies, err := trust.Model()
+			if err != nil {
+				return nil, fmt.Errorf("estate: party namespace %s: %w", view.Name, err)
+			}
+
+			namespace.Auth = []model.JWTMount{mount}
+			namespace.Policies = policies
+		}
+
+		out = append(out, namespace)
+	}
+
+	return out, nil
+}
+
+// vendorAdmins gives each party namespace with admin groups
+// (PKI.VendorAdmins) the roster's door and, per group, a grant on every PKI
+// mount of the party's namespace and its children: what the party's own
+// stack writes ([apply.SelectVendor]), and nothing of `sys/`.
+func (d *Desired) vendorAdmins(out *model.Desired) {
+	for i := range out.Vendors {
+		namespace := &out.Vendors[i]
+
+		groups := d.in.PKI.VendorAdmins[namespace.Name]
+		if len(groups) == 0 || strings.Contains(namespace.Name, "/") {
+			continue
+		}
+
+		var rules []model.Rule
+
+		for j := range out.Vendors {
+			other := &out.Vendors[j]
+			prefix := ""
+
+			switch {
+			case other.Name == namespace.Name:
+			case strings.HasPrefix(other.Name, namespace.Name+"/"):
+				prefix = strings.TrimPrefix(other.Name, namespace.Name+"/") + "/"
+			default:
+				continue
+			}
+
+			for k := range other.PKI {
+				rules = append(rules, model.Rule{
+					Path:         prefix + other.PKI[k].Path + "/*",
+					Capabilities: []string{model.CapCreate, model.CapRead, model.CapUpdate, model.CapDelete, model.CapList},
+				})
+			}
+		}
+
+		namespace.Auth = append(namespace.Auth, d.in.Roster.Door())
+
+		for _, group := range groups {
+			policy, grant := d.in.Roster.JobGrant(group, rules...)
+			namespace.Policies = append(namespace.Policies, policy)
+			namespace.Groups = append(namespace.Groups, grant)
+		}
+	}
 }
 
 // IdentityBootstrapCSRName is the Pulumi name of the certificate signing

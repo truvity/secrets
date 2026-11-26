@@ -60,6 +60,14 @@ func (w *Workload) policyName() string {
 	return w.Role
 }
 
+// Model is the trust as the JWT mount it is and the policies its workloads
+// declare, outside any environment: for a namespace that holds no KV mount
+// (a party's per-environment namespace), so a workload's Access may name
+// only paths that need none ([Sign], [CA], [Rules]).
+func (t *Trust) Model() (model.JWTMount, []model.Policy, error) {
+	return t.derive("", kvScope{})
+}
+
 // derive is the trust as the JWT mount it is, and the policies its workloads
 // declare.
 func (t *Trust) derive(audience string, scope kvScope) (model.JWTMount, []model.Policy, error) {

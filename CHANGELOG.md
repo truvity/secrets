@@ -17,8 +17,16 @@ from v0.2.0 on the Go module and `openbaoctl` with them.
 
 - **`pkg/estate`: the view of several roots.** `PrivatePKI.Root` is the private domain's root; `PrivatePKI.Roots` (omitted when empty) lists the other active roots a domain is declared under. Each chain is loaded under its own domain's root, a pending domain is checked against its own root's artifact, and `pkg/estate/stack` takes the identity CA's organization from the identity domain's root.
 
+- **A party's trust domains in a namespace of its own.** [ADR 0008](docs/decisions/0008-party-namespaces.md).
+  - `pkg/pki`: `trustDomains.{dns,uri}[].namespace` (one label, not an environment's name). The domain's intermediate derives into `<namespace>`, each issuing CA into `<namespace>/<env>`, signed there (`Authority.Namespace`, `Authority.NamespacePath`, `PendingIntermediate.Namespace`, `Derivation.DomainMounts`). `Derivation.Apply` places them in `model.Desired.Vendors`. Empty is root, as before.
+  - `pkg/model`: `Desired.Vendors`, the parties' namespaces (`<vendor>`, then `<vendor>/<env>`), applied after the environments; `Desired.Vendor`, `Desired.VendorOf`.
+  - `pkg/apply`: `Resource.Namespace`; `SelectVendor(vendor)` (everything inside the party's PKI mounts, never a namespace, mount or auth mount, never outside its namespace) and `SelectVendorMounts(vendor)` (the server owner's half), together covering the party's namespaces once; `Login.Namespace` logs in and works below root, every namespace argument relative to it; a party's namespaces are registered protected; in them a PKI mount's contents are selected apart from the mount. `BootstrapEnvironmentCAOptions.LoginNamespace` and `RequestElsewhere`.
+  - `pkg/estate`: a party's domain gets `<vendor>` and `<vendor>/<env>` (`Desired.Vendors`), with the cluster's mount, cert-manager's login and its policy in each child; `PKI.VendorAdmins` admits groups to the roster's door in `<vendor>`, granted the party's PKI mounts; `IssuerView.Namespace` and `IssuerView.ServerNamespace(env)`. A pending party domain's mount is the server owner's and its request the party's. The estate's own private, origin and identity domains stay in root.
+  - `pkg/builder`: `Trust.Model()`.
+
 ### Changed
 
+- **`apply.Resource` gained `Namespace`.** A selection that compares whole `Resource` values (`r == apply.Resource{…}`) must compare `Type` and `Name` instead; one that reads the fields selects what it did.
 - **Breaking:** custody outputs in which two generations name the same key are refused (`CustodyOutputs.Validate`): a ceremony for one generation could otherwise sign with another's root. A key is its partition, account and `mrk-` id, in whatever region it is published.
 - **Breaking:** an active root generation that some trust domain is declared under must be in `migration.trustedGenerations` (`Validate`): trust a root before it issues. An active root with no domain below it yet needs no trust.
 - **`estate.ActiveGeneration` refuses a contract with several active generations** (it named the first before; such a contract was itself refused). Ask `Contract.TrustDomainRoot` for a domain's own root.

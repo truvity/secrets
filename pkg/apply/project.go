@@ -27,7 +27,7 @@ func (a *applier) projectNamespace(parent *scope, project *model.ProjectNamespac
 	}
 	s.inside = s.base
 
-	if name := a.name("ns-" + parent.namespace.Name + "-" + project.Name); a.owns(TypeNamespace, name) {
+	if name := a.name("ns-" + parent.namespace.Name + "-" + project.Name); a.owns(path, TypeNamespace, name) {
 		created, err := vault.NewNamespace(a.c, name, &vault.NamespaceArgs{
 			Namespace: parent.arg,
 			Path:      pulumi.String(project.Name),

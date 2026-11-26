@@ -37,6 +37,9 @@ type (
 		// before the registration and reproduce the same "plugin not
 		// found in the catalog" error this model exists to prevent.
 		registeredPlugins map[string]*vault.Plugin
+		// namespaces are the Namespace resources registered so far, by
+		// path: a party's per-environment namespace waits for its parent.
+		namespaces map[string]pulumi.Resource
 	}
 
 	// scope is one namespace being registered: its label, its `namespace`
@@ -74,6 +77,7 @@ func newApplier(c *pulumi.Context, desired *model.Desired, opts Options) (*appli
 		mounts:            map[MountRef]*pkiMount{},
 		issuers:           map[model.IssuerRef]*pkiIssuer{},
 		registeredPlugins: map[string]*vault.Plugin{},
+		namespaces:        map[string]pulumi.Resource{},
 	}, nil
 }
 
@@ -114,26 +118,45 @@ func dependsOn(resources ...pulumi.Resource) []pulumi.ResourceOption {
 
 // namespace registers one namespace and everything in it.
 func (a *applier) namespace(namespace *model.Namespace) error {
-	s := &scope{namespace: namespace, label: namespace.Label()}
+	s := &scope{namespace: namespace, label: strings.ReplaceAll(namespace.Label(), "/", "-")}
 	s.base = options(a.opts.ResourceOptions, pulumi.Provider(a.provider))
 	s.inside = s.base
 
 	if namespace.Name != "" {
 		// A namespace another stack owns is only named: what is inside
 		// takes its path and waits for nothing.
-		if name := a.name("ns-" + namespace.Name); a.owns(TypeNamespace, name) {
-			created, err := vault.NewNamespace(a.c, name, &vault.NamespaceArgs{
-				Path: pulumi.String(namespace.Name),
-			}, s.base...)
+		if name := a.name("ns-" + s.label); a.owns(namespace.Name, TypeNamespace, name) {
+			parent, child, nested := strings.Cut(namespace.Name, "/")
+
+			args := &vault.NamespaceArgs{Path: pulumi.String(namespace.Name)}
+			opts := s.base
+
+			// A party's per-environment namespace is made inside the
+			// party's own, after it.
+			if nested {
+				args.Namespace, args.Path = a.namespaceArg(parent), pulumi.String(child)
+				opts = options(opts, dependsOn(a.namespaces[parent])...)
+			}
+
+			// A party's namespace is never deleted by a plan: removing
+			// one is slow and can stick, and everything in it goes with
+			// it. Dropping it from the model is refused like dropping any
+			// other protected resource.
+			if a.desired.Vendor(namespace.Name) {
+				opts = options(opts, pulumi.Protect(true))
+			}
+
+			created, err := vault.NewNamespace(a.c, name, args, opts...)
 			if err != nil {
 				return fmt.Errorf("namespace %s: %w", namespace.Name, err)
 			}
 
+			a.namespaces[namespace.Name] = created
 			s.created = created
 			s.inside = options(s.base, pulumi.DependsOn([]pulumi.Resource{created}))
 		}
 
-		s.arg = pulumi.String(namespace.Name)
+		s.arg = a.namespaceArg(namespace.Name)
 		a.result.Namespaces = append(a.result.Namespaces, namespace.Name)
 	}
 
@@ -164,7 +187,7 @@ func (a *applier) namespace(namespace *model.Namespace) error {
 		policy := &namespace.Policies[i]
 
 		name := a.name(s.label + "-policy-" + resourceName(policy.Name))
-		if !a.owns(TypePolicy, name) {
+		if !a.owns(s.namespace.Name, TypePolicy, name) {
 			continue
 		}
 
@@ -225,6 +248,22 @@ func (a *applier) namespace(namespace *model.Namespace) error {
 	}
 
 	return nil
+}
+
+// namespaceArg is a resource's `namespace` argument for a namespace path:
+// the path itself, or relative to [Login.Namespace] for a run logged in
+// below root (nil in the login's own namespace, as in root).
+func (a *applier) namespaceArg(path string) pulumi.StringPtrInput {
+	base := a.opts.Login.Namespace
+
+	switch {
+	case path == base:
+		return nil
+	case base != "" && within(path, base):
+		return pulumi.String(strings.TrimPrefix(path, base+"/"))
+	default:
+		return pulumi.String(path)
+	}
 }
 
 // kvMount registers a KV v2 mount and its restore canary.
@@ -334,7 +373,7 @@ func (a *applier) door(s *scope, mount *model.JWTMount, policies map[string]*vau
 		accessor    func() pulumi.StringOutput
 	)
 
-	if name := a.name(s.label + "-auth-" + mount.Path); a.owns(TypeJWTAuthBackend, name) {
+	if name := a.name(s.label + "-auth-" + mount.Path); a.owns(s.namespace.Name, TypeJWTAuthBackend, name) {
 		backend, err := jwt.NewAuthBackend(a.c, name, args,
 			a.pluginDependency(s.inside, "auth", authType)...)
 		if err != nil {
@@ -394,7 +433,7 @@ func (a *applier) lookupAccessor(s *scope, path string) func() pulumi.StringOutp
 
 func (a *applier) role(s *scope, mount string, backendPath pulumi.StringPtrInput, role *model.Role, policies map[string]*vault.Policy) error {
 	name := a.name(s.label + "-role-" + mount + "-" + role.Name)
-	if !a.owns(TypeJWTAuthBackendRole, name) {
+	if !a.owns(s.namespace.Name, TypeJWTAuthBackendRole, name) {
 		return nil
 	}
 

@@ -43,15 +43,19 @@ type (
 
 	// Authority is one CA the contract declares: a domain intermediate in
 	// the root namespace, or one environment's issuing CA in that
-	// environment's namespace.
+	// environment's namespace -- or, for a domain with a namespace of its
+	// own, in `<Namespace>/` and `<Namespace>/<Environment>`
+	// ([Authority.NamespacePath]).
 	Authority struct {
 		// Domain is the trust domain's name, Kind its shape.
 		Domain string
 		Kind   string
 		// Environment is "" for a domain intermediate.
 		Environment string
-		// Mount is the PKI mount that holds it, in the namespace of
-		// Environment ("" is root).
+		// Namespace is the domain's own namespace ([DNSTrustDomain.Namespace]),
+		// empty for one in root.
+		Namespace string
+		// Mount is the PKI mount that holds it, in [Authority.NamespacePath].
 		Mount string
 		// Issuer is its OpenBAO issuer (and key) name.
 		Issuer       string
@@ -119,6 +123,9 @@ type (
 	PendingIntermediate struct {
 		// Domain is the trust domain's name.
 		Domain string
+		// Namespace is the domain's own namespace, empty for root: the
+		// mount and key are in it.
+		Namespace string
 		// Mount is the domain mount's path in the root namespace, and
 		// MountDescription its description.
 		Mount            string
@@ -170,6 +177,10 @@ func (c *Contract) DeriveWith(environments []Environment, options DeriveOptions)
 		return nil, fmt.Errorf("pki: the contract declares no active root generation")
 	}
 
+	if err := c.namespacesApart(environments); err != nil {
+		return nil, err
+	}
+
 	pending, err := c.pendingDomains(options.PendingDomains)
 	if err != nil {
 		return nil, err
@@ -190,6 +201,7 @@ func (c *Contract) DeriveWith(environments []Environment, options DeriveOptions)
 		if pending[domain.Name] {
 			derivation.Pending = append(derivation.Pending, PendingIntermediate{
 				Domain:           domain.Name,
+				Namespace:        domain.Namespace,
 				Mount:            authority.Mount,
 				MountDescription: authority.mountDescription,
 				LeaseTTL:         authority.TTL,
@@ -367,6 +379,52 @@ func zonesApart(domain *DNSTrustDomain, zones []environmentZone) error {
 	return nil
 }
 
+// NamespacePath is the server namespace the authority lives in: "" (root)
+// or the environment's, for a domain in root; `<Namespace>` or
+// `<Namespace>/<Environment>` for a domain with a namespace of its own.
+func (a *Authority) NamespacePath() string {
+	switch {
+	case a.Namespace == "":
+		return a.Environment
+	case a.Environment == "":
+		return a.Namespace
+	default:
+		return a.Namespace + "/" + a.Environment
+	}
+}
+
+// namespacesApart refuses a trust domain's namespace that is also an
+// environment's name: the two would be one server namespace, and the
+// environment's own logins would reach the domain's CAs.
+func (c *Contract) namespacesApart(environments []Environment) error {
+	for _, name := range c.TrustDomainNames() {
+		namespace := c.domainNamespace(name)
+		if namespace == "" {
+			continue
+		}
+
+		for i := range environments {
+			if environments[i].Name == namespace {
+				return fmt.Errorf("pki: trust domain %s's namespace %q is also an environment's name", name, namespace)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (c *Contract) domainNamespace(name string) string {
+	if domain := c.DNSTrustDomain(name); domain != nil {
+		return domain.Namespace
+	}
+
+	if domain := c.URITrustDomain(name); domain != nil {
+		return domain.Namespace
+	}
+
+	return ""
+}
+
 // activeRootOf is the root generation a trust domain derives under: the one
 // it names, which must be authored and active.
 func (c *Contract) activeRootOf(domain, id string) (*RootGeneration, error) {
@@ -455,6 +513,7 @@ func (c *Contract) dnsDomainAuthority(domain *DNSTrustDomain, generation *RootGe
 	return Authority{
 		Domain:              domain.Name,
 		Kind:                KindDNS,
+		Namespace:           domain.Namespace,
 		Mount:               domain.DomainMountPath(),
 		Issuer:              intermediate.Name,
 		CommonName:          intermediate.Subject.CommonName,
@@ -476,6 +535,7 @@ func (c *Contract) uriDomainAuthority(domain *URITrustDomain, generation *RootGe
 	return Authority{
 		Domain:              domain.Name,
 		Kind:                KindURI,
+		Namespace:           domain.Namespace,
 		Mount:               domain.DomainMountPath(),
 		Issuer:              intermediate.Name,
 		CommonName:          intermediate.Subject.CommonName,
@@ -595,6 +655,7 @@ func (c *Contract) dnsIssuingAuthority(domain *DNSTrustDomain, generation *RootG
 		Domain:              domain.Name,
 		Kind:                KindDNS,
 		Environment:         environment.Name,
+		Namespace:           domain.Namespace,
 		Mount:               domain.IssuingMountPath(),
 		Issuer:              issuer,
 		CommonName:          commonName,
@@ -603,7 +664,7 @@ func (c *Contract) dnsIssuingAuthority(domain *DNSTrustDomain, generation *RootG
 		TTL:                 domain.Lifetimes.ClusterIntermediate,
 		MaxPathLength:       intermediate.MaxPathLen - 1,
 		PermittedDNSDomains: issuingPermittedDomains(domain, zone),
-		SignedBy:            &model.IssuerRef{Mount: domain.DomainMountPath(), Issuer: intermediate.Name},
+		SignedBy:            &model.IssuerRef{Namespace: domain.Namespace, Mount: domain.DomainMountPath(), Issuer: intermediate.Name},
 		Roles:               roles,
 		CredentialRoles:     credentials,
 		mountDescription: describe(domain.Placement.IssuingMountDescription, defaultIssuingMountDescription,
@@ -639,13 +700,14 @@ func (c *Contract) uriIssuingAuthority(domain *URITrustDomain, generation *RootG
 		issuer = domain.DomainIntermediate.Name + "-" + environment.Name
 		commonName = value + " " + issuingSuffix(domain.IssuingCA)
 		maxPathLength = domain.DomainIntermediate.MaxPathLen - 1
-		signedBy = &model.IssuerRef{Mount: domain.DomainMountPath(), Issuer: domain.DomainIntermediate.Name}
+		signedBy = &model.IssuerRef{Namespace: domain.Namespace, Mount: domain.DomainMountPath(), Issuer: domain.DomainIntermediate.Name}
 	}
 
 	return Authority{
 		Domain:       domain.Name,
 		Kind:         KindURI,
 		Environment:  environment.Name,
+		Namespace:    domain.Namespace,
 		Mount:        domain.IssuingMountPath(),
 		Issuer:       issuer,
 		CommonName:   commonName,
@@ -739,12 +801,23 @@ func (a *Authority) issuer() model.PKIIssuer {
 // RootMounts is the root namespace's mounts for the domain intermediates,
 // in authored order. Two domains that share a mount share it: the mount is
 // created once, from the first, and the others are further issuers in it.
-// The first issuer of a mount is its default.
+// The first issuer of a mount is its default. A domain with a namespace of
+// its own is in [Derivation.DomainMounts] of that namespace instead.
 func (d *Derivation) RootMounts() []model.PKIMount {
+	return d.DomainMounts("")
+}
+
+// DomainMounts is [Derivation.RootMounts] for the domains whose namespace is
+// namespace ("" is root).
+func (d *Derivation) DomainMounts(namespace string) []model.PKIMount {
 	var mounts []model.PKIMount
 
 	for i := range d.Domains {
 		domain := &d.Domains[i]
+		if domain.Namespace != namespace {
+			continue
+		}
+
 		issuer := domain.issuer()
 
 		if at := slices.IndexFunc(mounts, func(m model.PKIMount) bool { return m.Path == domain.Mount }); at >= 0 {
@@ -766,17 +839,19 @@ func (d *Derivation) RootMounts() []model.PKIMount {
 	return mounts
 }
 
-// EnvironmentMounts is one environment's mounts for its issuing CAs and
-// their roles. Authorities that share a mount share it; the mount's lease
-// bounds are the longest default and the longest maximum any leaf role on
-// it declares (the CA itself is imported, not issued, so its own lifetime is
-// not bounded by them).
+// EnvironmentMounts is the mounts of the issuing CAs, and their roles, that
+// live in one namespace: an environment's own (for the domains in root), or
+// a party's `<namespace>/<environment>` ([Authority.NamespacePath]).
+// Authorities that share a mount share it; the mount's lease bounds are the
+// longest default and the longest maximum any leaf role on it declares (the
+// CA itself is imported, not issued, so its own lifetime is not bounded by
+// them).
 func (d *Derivation) EnvironmentMounts(environment string) ([]model.PKIMount, error) {
 	var mounts []model.PKIMount
 
 	for i := range d.Issuing {
 		issuing := &d.Issuing[i]
-		if issuing.Environment != environment {
+		if issuing.NamespacePath() != environment {
 			continue
 		}
 
@@ -855,13 +930,25 @@ func leafLeaseBounds(mount string, roles []model.PKIRole) (defaultTTL, maxTTL st
 // the derived issuers and roles after what it already has -- the way a
 // retiring chain and its replacement share one mount while both are trusted.
 // An environment with authorities but no namespace is an error.
+//
+// A domain with a namespace of its own goes to the desired state's party
+// namespaces ([model.Desired.Vendors]): its intermediate to `<namespace>`,
+// its issuing CAs to `<namespace>/<environment>`. Either missing is an error.
 func (d *Derivation) Apply(desired *model.Desired) error {
 	desired.Root.PKI = mergeMounts(desired.Root.PKI, d.RootMounts())
+
+	domains := map[string]bool{}
+
+	for i := range d.Domains {
+		if d.Domains[i].Namespace != "" {
+			domains[d.Domains[i].Namespace] = true
+		}
+	}
 
 	environments := map[string]bool{}
 
 	for i := range d.Issuing {
-		environments[d.Issuing[i].Environment] = true
+		environments[d.Issuing[i].NamespacePath()] = true
 	}
 
 	for i := range desired.Namespaces {
@@ -880,7 +967,30 @@ func (d *Derivation) Apply(desired *model.Desired) error {
 		delete(environments, namespace.Name)
 	}
 
-	for environment := range environments {
+	for i := range desired.Vendors {
+		namespace := &desired.Vendors[i]
+
+		if domains[namespace.Name] {
+			namespace.PKI = mergeMounts(namespace.PKI, d.DomainMounts(namespace.Name))
+			delete(domains, namespace.Name)
+		}
+
+		if environments[namespace.Name] {
+			mounts, err := d.EnvironmentMounts(namespace.Name)
+			if err != nil {
+				return err
+			}
+
+			namespace.PKI = mergeMounts(namespace.PKI, mounts)
+			delete(environments, namespace.Name)
+		}
+	}
+
+	for _, namespace := range sortedKeys(domains) {
+		return fmt.Errorf("pki: namespace %q holds domain intermediates but the desired state has no such party namespace", namespace)
+	}
+
+	for _, environment := range sortedKeys(environments) {
 		return fmt.Errorf("pki: environment %q has issuing CAs but the desired state has no such namespace", environment)
 	}
 

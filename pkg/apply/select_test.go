@@ -164,7 +164,7 @@ func TestSelectingEverythingIsTheWhole(t *testing.T) {
 // be a partial apply.
 func TestASplitUnitLateInTheModelRegistersNothing(t *testing.T) {
 	m, _, err := deploy(t, example(t), selected(func(r apply.Resource) bool {
-		return r != apply.Resource{Type: apply.TypeKVSecret, Name: "prod-restore-canary"}
+		return r.Type != apply.TypeKVSecret || r.Name != "prod-restore-canary"
 	}), false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "prod-restore-canary")

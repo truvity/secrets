@@ -391,6 +391,10 @@ func (d *DNSTrustDomain) validate(global Global, generations map[string]generati
 		return err
 	}
 
+	if err := validateDomainNamespace(path, d.Namespace); err != nil {
+		return err
+	}
+
 	leafDefault, leafMaximum, err := d.Lifetimes.validate(path, rootLifetime, true)
 	if err != nil {
 		return err
@@ -605,6 +609,10 @@ func (d *URITrustDomain) validate(global Global, generations map[string]generati
 
 	rootLifetime, rootMaxPathLen, err := checkGenerationRef(path, d.RootGeneration, generations)
 	if err != nil {
+		return err
+	}
+
+	if err := validateDomainNamespace(path, d.Namespace); err != nil {
 		return err
 	}
 
@@ -1213,6 +1221,16 @@ func isDNSName(name string) bool {
 	}
 
 	return true
+}
+
+// validateDomainNamespace refuses a trust domain's namespace that is not one
+// lower-case label: it is one server namespace below root, never a path.
+func validateDomainNamespace(path, namespace string) error {
+	if namespace != "" && !isDNSLabel(namespace) {
+		return fmt.Errorf("pki: %s.namespace %q is not one lower-case label", path, namespace)
+	}
+
+	return nil
 }
 
 func isDNSLabel(label string) bool {

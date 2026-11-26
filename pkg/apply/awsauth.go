@@ -166,7 +166,7 @@ func (a *applier) awsAuthRole(
 	role *model.AWSAuthRole, policies map[string]*vault.Policy,
 ) error {
 	name := a.name(s.label + "-role-" + mount + "-" + role.Name)
-	if !a.owns(TypeAWSAuthBackendRole, name) {
+	if !a.owns(s.namespace.Name, TypeAWSAuthBackendRole, name) {
 		return nil
 	}
 

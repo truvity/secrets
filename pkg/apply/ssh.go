@@ -62,7 +62,7 @@ func (a *applier) sshMount(s *scope, desired *model.SSHMount) error {
 		role := &desired.Roles[i]
 
 		roleName := a.name(name + "-sshrole-" + role.Name)
-		if !a.owns(TypeSSHRole, roleName) {
+		if !a.owns(s.namespace.Name, TypeSSHRole, roleName) {
 			continue
 		}
 
@@ -185,7 +185,7 @@ func (a *applier) sshHostMount(s *scope, desired *model.SSHHostMount) error {
 		role := &desired.Roles[i]
 
 		roleName := a.name(name + "-sshrole-" + role.Name)
-		if !a.owns(TypeSSHRole, roleName) {
+		if !a.owns(s.namespace.Name, TypeSSHRole, roleName) {
 			continue
 		}
 
@@ -258,7 +258,7 @@ type sshBackend struct {
 // sshCA registers an SSH mount and its CA, which are one unit, unless
 // another stack owns them.
 func (a *applier) sshCA(s *scope, name, path, keyType string, args *vault.MountArgs, label string) (sshBackend, error) {
-	mountName, caName, owned, err := a.sshUnit(name)
+	mountName, caName, owned, err := a.sshUnit(s.namespace.Name, name)
 	if err != nil {
 		return sshBackend{}, err
 	}
