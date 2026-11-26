@@ -239,6 +239,14 @@ func (d *Desired) validateVendors(environments map[string]bool) error {
 		labels[name] = name
 	}
 
+	// A project's resources are named `<env>-<project>` as well.
+	for i := range d.Namespaces {
+		for j := range d.Namespaces[i].Projects {
+			path := d.Namespaces[i].Name + "/" + d.Namespaces[i].Projects[j].Name
+			labels[strings.ReplaceAll(path, "/", "-")] = path
+		}
+	}
+
 	for i := range d.Vendors {
 		namespace := &d.Vendors[i]
 

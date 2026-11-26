@@ -311,3 +311,10 @@ func TestTheIntermediatesRunSignsAChildCAInOneApply(t *testing.T) {
 		assert.NotContains(t, []string{apply.TypeNamespace, apply.TypeMount, apply.TypeJWTAuthBackend}, r.Type, r.Name)
 	}
 }
+
+// A project's resources are named `<env>-<project>` too.
+func TestAVendorChildNamedLikeAProjectIsRefused(t *testing.T) {
+	clash := withVendor(t)
+	clash.Vendors = append(clash.Vendors, model.Namespace{Name: "dev-billing"})
+	require.ErrorContains(t, clash.Validate(), "vendor namespace dev-billing and namespace dev/billing are both named dev-billing in the apply")
+}

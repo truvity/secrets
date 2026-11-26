@@ -115,38 +115,25 @@ func TestAVendorNamespacesDoors(t *testing.T) {
 		assert.Equal(t, []string{env + ":openbao:vendor-a"}, role.BoundAudiences, name)
 		assert.Equal(t, "sub", role.UserClaim)
 		assert.Equal(t, "groups", role.GroupsClaim)
-		assert.Equal(t, map[string][]string{"groups": {env + ":vendor-a:pki:internal:deployer", env + ":vendor-a:pki:internal:sre"}}, role.BoundClaims, name)
+		assert.Equal(t, map[string][]string{"groups": {
+			env + ":vendor-a:pki:internal:deployer", env + ":vendor-a:pki:internal:sre", env + ":vendor-a:pki:internal:ci",
+		}}, role.BoundClaims, name)
 		assert.Equal(t, []string{"pki-admin"}, role.Policies)
 		assert.True(t, role.NoDefaultPolicy)
 		assert.Equal(t, "15m", role.TTL)
 
-		policy := namespace.Policies[slices.IndexFunc(namespace.Policies, func(p model.Policy) bool { return p.Name == "pki-admin" })]
 		require.Len(t, namespace.PKI, 1)
-		mount := namespace.PKI[0].Path
 
-		// The intermediate's door also reaches its child's issuing mount.
-		reach := []string{mount + "/"}
+		// The exact grant of each door.
+		want := mountGrant("", namespace.PKI[0].Path, name == "vendor-a")
 		if name == "vendor-a" {
-			reach = append(reach, "alpha/"+modelNamespace(t, m, "vendor-a/alpha").PKI[0].Path+"/")
-		}
-
-		for _, rule := range policy.Rules {
-			assert.True(t, slices.ContainsFunc(reach, func(p string) bool { return strings.HasPrefix(rule.Path, p) }),
-				"%s's door names %s, outside the mounts it may reach", name, rule.Path)
-
-			for _, forbidden := range []string{"/issue/", "/sign/", "exported", "/root/generate", "/keys/generate", "/keys/import"} {
-				assert.NotContains(t, rule.Path, forbidden, "%s's door names %s", name, rule.Path)
+			for path, caps := range mountGrant("alpha/", modelNamespace(t, m, "vendor-a/alpha").PKI[0].Path, false) {
+				want[path] = caps
 			}
 		}
 
-		paths := map[string]bool{}
-		for _, rule := range policy.Rules {
-			paths[rule.Path] = true
-		}
-
-		assert.True(t, paths[mount+"/intermediate/generate/internal"], "%s: the request", name)
-		assert.True(t, paths[mount+"/intermediate/set-signed"], "%s: the import", name)
-		assert.Equal(t, name == "vendor-a", paths[mount+"/root/sign-intermediate"], "%s: signing the issuing CAs is the intermediate's alone", name)
+		assert.Equal(t, want, grantOf(t, namespace), "%s's door", name)
+		refusesOutsideTheApply(t, name, grantOf(t, namespace), namespace.PKI[0].Path, name == "vendor-a")
 	}
 
 	without, err := estate.Build(withVendorNamespace(t, false))
@@ -190,45 +177,124 @@ func TestAnEnvironmentsDoorCannotReachAnother(t *testing.T) {
 	// mounts (above): a policy there cannot reach its parent, where the
 	// intermediate is, nor a sibling, whatever the mounts are called.
 
-	// The intermediate's door reaches every child's issuing mount, the
-	// request, the import and the configuration there, and nothing outside
-	// the party's namespace; only its own mount signs.
-	intermediate := party.Policies[slices.IndexFunc(party.Policies, func(p model.Policy) bool { return p.Name == "pki-admin" })]
-	paths := map[string]bool{}
-
-	for _, rule := range intermediate.Rules {
-		paths[rule.Path] = true
-
-		inside := strings.HasPrefix(rule.Path, party.PKI[0].Path+"/") ||
-			strings.HasPrefix(rule.Path, "alpha/"+alpha.PKI[0].Path+"/") ||
-			strings.HasPrefix(rule.Path, "beta/"+beta.PKI[0].Path+"/")
-		assert.True(t, inside, "the intermediate's door names %s", rule.Path)
-
-		for _, forbidden := range []string{"sys/", "../", "/issue/", "/sign/", "exported"} {
-			assert.NotContains(t, rule.Path, forbidden, "the intermediate's door names %s", rule.Path)
-		}
-
-		if strings.HasSuffix(rule.Path, "/root/sign-intermediate") {
-			assert.Equal(t, party.PKI[0].Path+"/root/sign-intermediate", rule.Path, "only the intermediate signs")
-		}
-	}
-
+	// The intermediate's door: its own mount, signing included, and each
+	// child's issuing mount, exactly; nothing outside the party's namespace.
+	want := mountGrant("", party.PKI[0].Path, true)
 	for _, child := range []*model.Namespace{alpha, beta} {
 		_, env, _ := strings.Cut(child.Name, "/")
-		for _, endpoint := range []string{"/intermediate/generate/internal", "/intermediate/set-signed", "/config/*", "/roles/*"} {
-			assert.True(t, paths[env+"/"+child.PKI[0].Path+endpoint], "the intermediate's door lacks %s/%s%s", env, child.PKI[0].Path, endpoint)
+		for path, caps := range mountGrant(env+"/", child.PKI[0].Path, false) {
+			want[path] = caps
 		}
 	}
 
-	// Each environment's door binds its own environment's audience.
-	for _, namespace := range []*model.Namespace{alpha, beta} {
-		_, env, _ := strings.Cut(namespace.Name, "/")
-		for _, door := range namespace.Auth {
-			if door.Path == "jwt-pki" {
-				assert.Equal(t, []string{env + ":openbao:vendor-a"}, door.Roles[0].BoundAudiences)
-			}
+	assert.Equal(t, want, grantOf(t, party))
+	refusesOutsideTheApply(t, "vendor-a", grantOf(t, party), party.PKI[0].Path, true)
+	refusesOutsideTheApply(t, "vendor-a/alpha", grantOf(t, alpha), alpha.PKI[0].Path, false)
+
+	// alpha's door reaches no sibling and no parent: each of its paths is
+	// in alpha's own namespace, and none names beta's mounts.
+	for path := range grantOf(t, alpha) {
+		assert.False(t, matches(path, "beta/"+beta.PKI[0].Path+"/intermediate/set-signed"), path)
+	}
+}
+
+// mountGrant is the exact grant of a door on one PKI mount (prefix: the
+// child namespace it is in, relative to the door's).
+func mountGrant(prefix, mount string, intermediate bool) map[string][]string {
+	m := prefix + mount
+	grant := map[string][]string{
+		m + "/intermediate/generate/internal": {"create", "update"},
+		m + "/intermediate/set-signed":        {"create", "update"},
+		m + "/issuer/+":                       {"read", "update"},
+		m + "/issuers":                        {"read", "list"},
+		m + "/key/+":                          {"read", "update"},
+		m + "/keys":                           {"read", "list"},
+		m + "/config/issuers":                 {"read", "update"},
+		m + "/config/urls":                    {"read", "update"},
+		m + "/config/crl":                     {"read", "update"},
+		m + "/config/auto-tidy":               {"read", "update"},
+		m + "/roles/+":                        {"create", "read", "update", "delete"},
+		m + "/roles":                          {"read", "list"},
+		m + "/cert/+":                         {"read"},
+	}
+
+	if intermediate {
+		grant[m+"/root/sign-intermediate"] = []string{"create", "update"}
+	}
+
+	return grant
+}
+
+// grantOf is the door policy of a namespace, path to capabilities.
+func grantOf(t *testing.T, namespace *model.Namespace) map[string][]string {
+	t.Helper()
+
+	at := slices.IndexFunc(namespace.Policies, func(p model.Policy) bool { return p.Name == "pki-admin" })
+	require.GreaterOrEqual(t, at, 0, "%s has no door policy", namespace.Name)
+
+	grant := map[string][]string{}
+	for _, rule := range namespace.Policies[at].Rules {
+		grant[rule.Path] = rule.Capabilities
+	}
+
+	return grant
+}
+
+// matches is OpenBAO's policy path matching: `+` is one whole segment, and a
+// trailing `*` any suffix.
+func matches(pattern, path string) bool {
+	if prefix, glob := strings.CutSuffix(pattern, "*"); glob {
+		return matchSegments(prefix, path[:min(len(path), len(prefix))]) && len(path) >= len(prefix)
+	}
+
+	return matchSegments(pattern, path)
+}
+
+func matchSegments(pattern, path string) bool {
+	ps, xs := strings.Split(pattern, "/"), strings.Split(path, "/")
+	if len(ps) != len(xs) {
+		return false
+	}
+
+	for i := range ps {
+		if ps[i] != "+" && ps[i] != xs[i] {
+			return false
 		}
 	}
+
+	return true
+}
+
+// refusesOutsideTheApply asserts that no path of grant reaches what a
+// party's stack never does: issue or sign a leaf, sign a CA (but the
+// intermediate's own root/sign-intermediate), import or export a key, or
+// anything of sys/.
+func refusesOutsideTheApply(t *testing.T, name string, grant map[string][]string, mount string, intermediate bool) {
+	t.Helper()
+
+	refused := []string{
+		mount + "/issue/x", mount + "/sign/x", mount + "/sign-verbatim", mount + "/sign-verbatim/x",
+		mount + "/sign-self-issued", mount + "/issuer/r/issue/x", mount + "/issuer/r/sign/x",
+		mount + "/issuer/r/sign-verbatim", mount + "/issuer/r/sign-self-issued", mount + "/issuer/r/sign-intermediate",
+		mount + "/config/ca", mount + "/keys/import", mount + "/keys/generate/exported", mount + "/issuers/import/bundle",
+		mount + "/intermediate/generate/exported", mount + "/root/generate/internal", mount + "/root/generate/exported",
+		"sys/mounts", "sys/mounts/x", "sys/namespaces/x", "sys/auth/x", "sys/policies/acl/x",
+	}
+
+	if !intermediate {
+		refused = append(refused, mount+"/root/sign-intermediate")
+	}
+
+	for _, path := range refused {
+		for pattern := range grant {
+			assert.False(t, matches(pattern, path), "%s's door grants %s through %s", name, path, pattern)
+		}
+	}
+
+	// The matcher itself: + is one segment, a trailing * any suffix.
+	assert.True(t, matches("a/+", "a/b"))
+	assert.False(t, matches("a/+", "a/b/c"))
+	assert.True(t, matches("a/*", "a/b/c"))
 }
 
 func TestCredentialRolesAreRefusedInAPartyNamespace(t *testing.T) {

@@ -58,10 +58,14 @@ party's tree: the intermediate's mount and every `<vendor>/<env>` PKI mount.
 It is for the run that (re)issues the party's issuing CAs in one apply:
 the request in the child, the signature at the intermediate, the import
 back in the child. Every door grants only what a party's stack does in a
-PKI mount -- the internal key and its request, the import, issuers, keys,
-configuration and roles -- never a leaf (`issue`, `sign`: cert-manager has
-its own login), never an exportable key, never `sys/`; signing another CA
-(`root/sign-intermediate`) is on the intermediate's mount alone. A role's
+PKI mount, each path exact or one `+` segment deep -- the internal key and
+its request, the import, the issuer and key objects, the four
+configurations the apply writes, and the roles -- never a leaf (`issue`,
+`sign`, an issuer's own `issue`/`sign` paths: cert-manager has its own
+login), never a key import (`config/ca`) or an exportable key, never
+`sys/`; signing another CA (`root/sign-intermediate`) is on the
+intermediate's mount alone. A glob such as `issuer/*` or `config/*` would
+reach all of those, so none is used. A role's
 bound claims and its no-default-policy are part of the model
 (`model.Role.BoundClaims`, `NoDefaultPolicy`).
 

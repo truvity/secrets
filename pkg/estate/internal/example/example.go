@@ -235,10 +235,12 @@ func WithVendorNamespace(t testing.TB, in *estate.Inputs, doors bool) {
 
 	if doors {
 		in.PKI.VendorDoors = &estate.VendorDoors{
-			Mount:       "jwt-pki",
-			Role:        "pki-admin",
-			Audience:    "{env}:openbao:{vendor}",
-			Groups:      []string{"{env}:{vendor}:pki:internal:deployer", "{env}:{vendor}:pki:internal:sre"},
+			Mount:    "jwt-pki",
+			Role:     "pki-admin",
+			Audience: "{env}:openbao:{vendor}",
+			Groups: []string{
+				"{env}:{vendor}:pki:internal:deployer", "{env}:{vendor}:pki:internal:sre", "{env}:{vendor}:pki:internal:ci",
+			},
 			UserClaim:   "sub",
 			GroupsClaim: "groups",
 			TTL:         "15m",
