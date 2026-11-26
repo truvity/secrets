@@ -62,8 +62,9 @@ func (d *Desired) signedChain(ctx context.Context, logger *slog.Logger, chains C
 		return "", fmt.Errorf("estate: %s is external and no chain loader is given", ref)
 	}
 
-	generation := d.PKI.Root.GenerationID
-
+	// Every chain is loaded under its OWN trust domain's root generation:
+	// with one root per party, a domain's intermediate is never looked for
+	// under another party's root.
 	if ref.Namespace != "" {
 		identity := d.in.PKI.Contract.URITrustDomain(d.in.PKI.Identity)
 		if identity == nil || ref.Issuer != identity.EnvironmentCAIssuerName(ref.Namespace) {
@@ -75,7 +76,7 @@ func (d *Desired) signedChain(ctx context.Context, logger *slog.Logger, chains C
 			return "", err
 		}
 
-		chain, err := chains.EnvironmentCA(ref.Namespace, zone, generation)
+		chain, err := chains.EnvironmentCA(ref.Namespace, zone, identity.RootGeneration)
 		if err != nil {
 			return "", fmt.Errorf("%s identity environment CA: %w", ref.Namespace, err)
 		}
@@ -94,7 +95,12 @@ func (d *Desired) signedChain(ctx context.Context, logger *slog.Logger, chains C
 
 	domain := &d.PKI.Domains[at]
 
-	chain, err := chains.DomainIntermediate(domain.TrustDomain, generation)
+	generation, err := d.in.PKI.Contract.TrustDomainRoot(domain.TrustDomain)
+	if err != nil {
+		return "", fmt.Errorf("estate: %s domain intermediate: %w", domain.TrustDomain, err)
+	}
+
+	chain, err := chains.DomainIntermediate(domain.TrustDomain, generation.ID)
 	if err != nil {
 		return "", fmt.Errorf("%s domain intermediate: %w", domain.TrustDomain, err)
 	}

@@ -36,6 +36,10 @@ func (c *Contract) Validate() error {
 		return err
 	}
 
+	if err := c.defaultRootGenerations(); err != nil {
+		return err
+	}
+
 	usedNames := map[string]string{}
 
 	for i := range c.TrustDomains.DNS {
@@ -220,11 +224,55 @@ func validateGenerations(generations []RootGeneration, needDR bool) (map[string]
 		}
 	}
 
-	if active != 1 {
-		return nil, fmt.Errorf("pki: exactly one rootGeneration must be active, got %d", active)
+	if active == 0 {
+		return nil, fmt.Errorf("pki: at least one rootGeneration must be active, got none")
 	}
 
 	return infos, nil
+}
+
+// defaultRootGenerations fills a trust domain's empty rootGeneration with
+// the contract's one active generation, and refuses an empty one when
+// several are active: which root signs a domain is then the author's
+// choice, never the order of a list.
+func (c *Contract) defaultRootGenerations() error {
+	active := c.ActiveGenerations()
+
+	fill := func(path string, id *string) error {
+		if *id != "" {
+			return nil
+		}
+
+		if len(active) != 1 {
+			ids := make([]string, 0, len(active))
+			for _, generation := range active {
+				ids = append(ids, generation.ID)
+			}
+
+			return fmt.Errorf("pki: %s.rootGeneration is required: %d root generations are active (%s), so none is the default",
+				path, len(active), strings.Join(ids, ", "))
+		}
+
+		*id = active[0].ID
+
+		return nil
+	}
+
+	for i := range c.TrustDomains.DNS {
+		domain := &c.TrustDomains.DNS[i]
+		if err := fill("trustDomains.dns["+domain.Name+"]", &domain.RootGeneration); err != nil {
+			return err
+		}
+	}
+
+	for i := range c.TrustDomains.URI {
+		domain := &c.TrustDomains.URI[i]
+		if err := fill("trustDomains.uri["+domain.Name+"]", &domain.RootGeneration); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (rc RootCertificate) validate(path string, lifetime time.Duration) error {

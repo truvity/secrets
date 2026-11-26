@@ -407,7 +407,12 @@ the first disagreement:
   and ceremony) in one account; per generation an alias ending in the
   generation ID, two different regions, a multi-region key in each that is
   the same key, in the roles' account, with the stack's ceremony role;
-- every generation the contract authors is published, and no other one is;
+- the generation being signed under has its custody in the outputs' account
+  (a file speaks for ONE account: with one root per party, each party's root
+  in its own account, pass the file of the account the generation is in;
+  `Contract.GenerationsInAccount` lists them);
+- every generation the contract authors in that account is published, and
+  no other one is;
 - for every authored generation: the key's account is the authored
   `custody.accountId`, the primary region is `custody.region`, and the
   replica region is `custody.disasterRecovery.region` (when the contract
@@ -477,8 +482,12 @@ always, a DNS domain optionally (`environments`), and a DNS domain that lists
 none reaches every environment, as every DNS domain did before the list
 existed. An environment needs a zone only for the domains that reach it, and
 one a domain does not reach gets no issuing CA, roles or mount of it; the
-domain intermediate is one either way, in the root namespace. It refuses a
-domain declared below a generation that is not the active one, and a zone
+domain intermediate is one either way, in the root namespace. Each domain
+derives under the root generation it names (`rootGeneration`), which must be
+active; several generations may be active at once, one root per party, and an
+empty `rootGeneration` means the one active generation (it is required when
+several are). It refuses a domain declared below a generation that is not
+active, and a zone
 that is not a lower-case DNS name, is not its domain's suffix or under it,
 or falls outside the intermediate's name constraint. In a name-constrained
 domain it also refuses a zone equal to the whole suffix, two environments

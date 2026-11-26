@@ -5,6 +5,21 @@ heading here is a patch cut automatically for dependency bumps alone; its
 GitHub Release lists them. Both charts are released at every version, and
 from v0.2.0 on the Go module and `openbaoctl` with them.
 
+## v0.53.0
+
+### Added
+
+- **`pkg/pki`: several active root generations, one per party.** `Validate` requires at least one active generation instead of exactly one, and each trust domain (DNS or URI) derives under the generation its `rootGeneration` names, which must be active: its intermediate's and root-signed environment CAs' artifacts, and its issuing CAs' organization, are that root's. An empty `rootGeneration` is the one active generation (`Validate` fills it in); with several active it is required. New: `Contract.ActiveGenerations`, `Contract.TrustDomainRoot(domain)`, `Contract.DeclaresUnder(generation)`, `Contract.CustodyAccounts`, `Contract.GenerationsInAccount(account)`. `EmergencyServerSpec` signs, per root, only for a require-trusted domain declared under that root. A contract with one active root derives what it did (every golden is unchanged). [ADR 0007](docs/decisions/0007-several-active-roots.md).
+
+- **Custody outputs per account.** A custody outputs file speaks for its roles' account. `VerifyCustody` and `VerifyCustodyOutputs` bind the generations the contract authors in that account, and a ceremony for a generation whose custody is in another account is refused by name (pass that account's file). With one custody account nothing changes. Adoption for a second root: one `pkg/custody` per account, each one's outputs synced, and `--custody-outputs` names the file of the generation's account.
+
+- **`pkg/estate`: the view of several roots.** `PrivatePKI.Root` is the private domain's root; `PrivatePKI.Roots` (omitted when empty) lists the other active roots a domain is declared under. Each chain is loaded under its own domain's root, a pending domain is checked against its own root's artifact, and `pkg/estate/stack` takes the identity CA's organization from the identity domain's root.
+
+### Changed
+
+- **`estate.ActiveGeneration` refuses a contract with several active generations** (it named the first before; such a contract was itself refused). Ask `Contract.TrustDomainRoot` for a domain's own root.
+- Error text: a domain below a generation that is not active now reads `… declared below root generation "<id>", which is <state>, not active`, and an unknown one `… which the contract does not author`; `EmergencyServerSpec` reads `only an active generation signs a break-glass leaf`.
+
 ## v0.52.0
 
 ### Added

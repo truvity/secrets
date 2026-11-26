@@ -159,11 +159,14 @@ func (c *Contract) Derive(environments []Environment) (*Derivation, error) {
 // It refuses what it could not derive whole: a zone the contract needs and
 // the environment does not have, a zone outside its own domain, two
 // environments whose zones nest in a name-constrained domain, a catalog role
-// with no names, a domain below a generation that is not the active one, and
-// a pending domain that is no DNS domain or shares its domain mount.
+// with no names, a domain below a generation that is not active, and a
+// pending domain that is no DNS domain or shares its domain mount.
+//
+// Each domain derives under its own root generation: with several active
+// generations (one root per party), a domain's intermediate, its artifacts
+// and its issuing CAs' organization are that root's, never another's.
 func (c *Contract) DeriveWith(environments []Environment, options DeriveOptions) (*Derivation, error) {
-	generation := c.activeGeneration()
-	if generation == nil {
+	if len(c.ActiveGenerations()) == 0 {
 		return nil, fmt.Errorf("pki: the contract declares no active root generation")
 	}
 
@@ -176,9 +179,10 @@ func (c *Contract) DeriveWith(environments []Environment, options DeriveOptions)
 
 	for i := range c.TrustDomains.DNS {
 		domain := &c.TrustDomains.DNS[i]
-		if domain.RootGeneration != generation.ID {
-			return nil, fmt.Errorf("pki: trust domain %s is declared below root generation %q, not the active %q",
-				domain.Name, domain.RootGeneration, generation.ID)
+
+		generation, err := c.activeRootOf(domain.Name, domain.RootGeneration)
+		if err != nil {
+			return nil, err
 		}
 
 		authority := c.dnsDomainAuthority(domain, generation)
@@ -203,9 +207,10 @@ func (c *Contract) DeriveWith(environments []Environment, options DeriveOptions)
 
 	for i := range c.TrustDomains.URI {
 		domain := &c.TrustDomains.URI[i]
-		if domain.RootGeneration != generation.ID {
-			return nil, fmt.Errorf("pki: trust domain %s is declared below root generation %q, not the active %q",
-				domain.Name, domain.RootGeneration, generation.ID)
+
+		generation, err := c.activeRootOf(domain.Name, domain.RootGeneration)
+		if err != nil {
+			return nil, err
 		}
 
 		if domain.hasSharedIntermediate() {
@@ -226,7 +231,7 @@ func (c *Contract) DeriveWith(environments []Environment, options DeriveOptions)
 				continue
 			}
 
-			authority, err := c.dnsIssuingAuthority(domain, generation, environment)
+			authority, err := c.dnsIssuingAuthority(domain, c.RootGeneration(domain.RootGeneration), environment)
 			if err != nil {
 				return nil, err
 			}
@@ -241,7 +246,7 @@ func (c *Contract) DeriveWith(environments []Environment, options DeriveOptions)
 				continue
 			}
 
-			authority, err := c.uriIssuingAuthority(domain, generation, environment)
+			authority, err := c.uriIssuingAuthority(domain, c.RootGeneration(domain.RootGeneration), environment)
 			if err != nil {
 				return nil, err
 			}
@@ -362,14 +367,20 @@ func zonesApart(domain *DNSTrustDomain, zones []environmentZone) error {
 	return nil
 }
 
-func (c *Contract) activeGeneration() *RootGeneration {
-	for i := range c.Generations {
-		if c.Generations[i].State == GenerationActive {
-			return &c.Generations[i]
-		}
+// activeRootOf is the root generation a trust domain derives under: the one
+// it names, which must be authored and active.
+func (c *Contract) activeRootOf(domain, id string) (*RootGeneration, error) {
+	generation := c.RootGeneration(id)
+	if generation == nil {
+		return nil, fmt.Errorf("pki: trust domain %s is declared below root generation %q, which the contract does not author", domain, id)
 	}
 
-	return nil
+	if generation.State != GenerationActive {
+		return nil, fmt.Errorf("pki: trust domain %s is declared below root generation %q, which is %s, not active",
+			domain, id, generation.State)
+	}
+
+	return generation, nil
 }
 
 // domainMountPath is the root-namespace mount that holds a domain's

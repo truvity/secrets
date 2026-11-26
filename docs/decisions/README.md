@@ -29,6 +29,7 @@ reasoning for the decisions they cover.
 | [0004](0004-jwt-oidc-mounts-state-supported-signing-algorithms.md) | Every JWT/OIDC mount states its supported signing algorithms |
 | [0005](0005-one-model-several-stacks.md) | One model may be applied as several stacks (`Options.Select`) |
 | [0006](0006-dns-trust-domains-per-environment.md) | Any number of DNS trust domains, each reaching its own environments, and pending domain intermediates (`environments`, `Cluster.Zones`, `PendingDomains`) |
+| [0007](0007-several-active-roots.md) | Several active roots, one per party, with custody outputs per account (`rootGeneration`, `PrivatePKI.Roots`, `Contract.TrustDomainRoot`) |
 
 ## Template
 

@@ -73,8 +73,11 @@ const (
 	// yet become the fleet's active one; a ceremony may still sign under
 	// it.
 	GenerationPreparing = "preparing"
-	// GenerationActive is the one generation every trust domain below the
-	// root is declared under. Exactly one generation is GenerationActive.
+	// GenerationActive is a generation trust domains are declared under
+	// and derived from. At least one generation is GenerationActive; an
+	// estate with one root per party has several, and each trust domain
+	// names its own ([DNSTrustDomain.RootGeneration],
+	// [URITrustDomain.RootGeneration]).
 	GenerationActive = "active"
 	// GenerationRetiring is a generation no longer signing new material
 	// but not yet fully drained.
@@ -241,8 +244,12 @@ type (
 	// domain intermediate the root signs, the lifetimes of everything
 	// under it, and the leaf roles its environments' mounts offer.
 	DNSTrustDomain struct {
-		Name           string `yaml:"name"`
-		Suffix         string `yaml:"suffix"`
+		Name   string `yaml:"name"`
+		Suffix string `yaml:"suffix"`
+		// RootGeneration is the root generation that signs this domain's
+		// intermediate. It must be an active one to derive. Left empty, it
+		// is the contract's one active generation ([Contract.Validate]
+		// fills it in); with several active generations it is required.
 		RootGeneration string `yaml:"rootGeneration"`
 		// RequireTrusted marks a domain whose active generation must
 		// always appear in [Migration.TrustedGenerations]: a leaf this
@@ -353,7 +360,10 @@ type (
 	// no per-role name patterns, one role, and an explicit
 	// per-environment allow-list rather than a DNS domain's roles list.
 	URITrustDomain struct {
-		Name           string `yaml:"name"`
+		Name string `yaml:"name"`
+		// RootGeneration is as [DNSTrustDomain.RootGeneration]: the root
+		// that signs this domain's intermediate and its root-signed
+		// environment CAs, the one active generation when left empty.
 		RootGeneration string `yaml:"rootGeneration"`
 		// DomainIntermediate is the shared intermediate every environment
 		// without its own root-signed CA is issued under. It is OPTIONAL:
@@ -739,6 +749,92 @@ func (c *Contract) RootGeneration(id string) *RootGeneration {
 	}
 
 	return nil
+}
+
+// ActiveGenerations returns every active generation, in authored order.
+func (c *Contract) ActiveGenerations() []*RootGeneration {
+	var active []*RootGeneration
+
+	for i := range c.Generations {
+		if c.Generations[i].State == GenerationActive {
+			active = append(active, &c.Generations[i])
+		}
+	}
+
+	return active
+}
+
+// TrustDomainRoot returns the root generation the named trust domain (DNS
+// or URI) is declared under. It refuses an unknown domain and a domain whose
+// generation is not authored.
+func (c *Contract) TrustDomainRoot(name string) (*RootGeneration, error) {
+	var id string
+
+	switch {
+	case c.DNSTrustDomain(name) != nil:
+		id = c.DNSTrustDomain(name).RootGeneration
+	case c.URITrustDomain(name) != nil:
+		id = c.URITrustDomain(name).RootGeneration
+	default:
+		return nil, fmt.Errorf("pki: no trust domain named %q", name)
+	}
+
+	generation := c.RootGeneration(id)
+	if generation == nil {
+		return nil, fmt.Errorf("pki: trust domain %s names unknown root generation %q", name, id)
+	}
+
+	return generation, nil
+}
+
+// DeclaresUnder reports whether some trust domain (DNS or URI) is declared
+// under the root generation id.
+func (c *Contract) DeclaresUnder(id string) bool {
+	for i := range c.TrustDomains.DNS {
+		if c.TrustDomains.DNS[i].RootGeneration == id {
+			return true
+		}
+	}
+
+	for i := range c.TrustDomains.URI {
+		if c.TrustDomains.URI[i].RootGeneration == id {
+			return true
+		}
+	}
+
+	return false
+}
+
+// CustodyAccounts lists every AWS account a root generation's custody is
+// in, sorted. A consumer deploys one custody ([github.com/truvity/secrets/pkg/custody])
+// per account, with [Contract.GenerationsInAccount] as its generations.
+func (c *Contract) CustodyAccounts() []string {
+	var accounts []string
+
+	for i := range c.Generations {
+		if account := c.Generations[i].Custody.AccountID; !slices.Contains(accounts, account) {
+			accounts = append(accounts, account)
+		}
+	}
+
+	slices.Sort(accounts)
+
+	return accounts
+}
+
+// GenerationsInAccount returns the generations whose custody is in
+// accountID, in authored order: what one account's custody holds, and
+// what its custody outputs must publish ([Contract.VerifyCustody]).
+func (c *Contract) GenerationsInAccount(accountID string) []*RootGeneration {
+	var generations []*RootGeneration
+
+	for i := range c.Generations {
+		if c.Generations[i].Custody.AccountID == accountID {
+			generations = append(generations, &c.Generations[i])
+		}
+	}
+
+	return generations
 }
 
 // DNSTrustDomain returns the authored DNS trust domain with this name, or

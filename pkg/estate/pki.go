@@ -20,7 +20,13 @@ type (
 	// outside the server and signs exactly once, in the ceremony; the server
 	// only holds the certificates it signed.
 	PrivatePKI struct {
-		Root    RootAuthority     `yaml:"root"`
+		// Root is the root generation the private domain is declared under:
+		// with one active generation, the contract's root.
+		Root RootAuthority `yaml:"root"`
+		// Roots are the other active root generations some trust domain is
+		// declared under, in authored order: empty with one root, one per
+		// further party with a root of its own.
+		Roots   []RootAuthority   `yaml:"roots,omitempty"`
 		Domains []DomainAuthority `yaml:"domains"`
 		// Pending are the domain intermediates the root has not signed yet
 		// (PKI.PendingDomains): their mount, key and request alone.
@@ -41,7 +47,7 @@ type (
 		KeyCurve         string `yaml:"keyCurve"`
 	}
 
-	// RootAuthority is the contract's active root generation.
+	// RootAuthority is one active root generation of the contract.
 	RootAuthority struct {
 		GenerationID  string `yaml:"generationId"`
 		CommonName    string `yaml:"commonName"`
@@ -136,7 +142,7 @@ func configurePrivatePKI(desired *Desired, inputs *Inputs, clusters []Cluster) (
 		return nil, fmt.Errorf("estate: the private PKI contract is required")
 	}
 
-	generation, err := ActiveGeneration(contract)
+	generation, err := privateRoot(in)
 	if err != nil {
 		return nil, err
 	}
@@ -186,17 +192,12 @@ func configurePrivatePKI(desired *Desired, inputs *Inputs, clusters []Cluster) (
 		desired.identityRoles = []string{identity.Role.Name}
 	}
 
-	desired.PKI = PrivatePKI{
-		Root: RootAuthority{
-			GenerationID:  generation.ID,
-			CommonName:    generation.Certificate.Subject.CommonName,
-			Organization:  generation.Certificate.Subject.Organization,
-			Custody:       generation.Custody.Provider,
-			KeyCurve:      contract.Global.KeyCurve,
-			TTL:           generation.Lifetime,
-			MaxPathLength: generation.Certificate.MaxPathLen,
-			ArtifactPath:  contract.RootArtifactPath(generation.ID),
-		},
+	desired.PKI = PrivatePKI{Root: rootAuthority(contract, generation)}
+
+	for _, other := range declaredRoots(contract) {
+		if other.ID != generation.ID {
+			desired.PKI.Roots = append(desired.PKI.Roots, rootAuthority(contract, other))
+		}
 	}
 
 	for i := range derivation.Domains {
@@ -318,22 +319,18 @@ func checkPendingDomains(in *PKI) error {
 		return nil
 	}
 
-	generation, err := ActiveGeneration(in.Contract)
-	if err != nil {
-		return err
-	}
-
 	for _, name := range in.PendingDomains {
 		if name == in.Private || name == in.Origin {
 			return fmt.Errorf("estate: trust domain %s cannot be pending: the private and origin domains are signed before anything else", name)
 		}
 
 		// An unknown name is the derivation's to refuse.
-		if in.Contract.DNSTrustDomain(name) == nil {
+		domain := in.Contract.DNSTrustDomain(name)
+		if domain == nil {
 			continue
 		}
 
-		spec, err := in.Contract.DNSIntermediateSpec(name, generation.ID)
+		spec, err := in.Contract.DNSIntermediateSpec(name, domain.RootGeneration)
 		if err != nil {
 			return fmt.Errorf("estate: pending domain %s: %w", name, err)
 		}
@@ -512,15 +509,69 @@ func certManagerLogin(in *Inputs, role, policy, audience string, signs ...builde
 	return builder.Workload{Role: role, Subject: in.PKI.Subject, Audience: audience, TTL: in.Names.TokenTTL, Policy: policy, Access: signs}
 }
 
-// ActiveGeneration is the contract's one active root generation.
+// ActiveGeneration is the contract's one active root generation. A contract
+// with several active generations (one root per party) has no such one: ask
+// for a trust domain's own with [pki.Contract.TrustDomainRoot].
 func ActiveGeneration(contract *pki.Contract) (*pki.RootGeneration, error) {
+	active := contract.ActiveGenerations()
+
+	switch len(active) {
+	case 0:
+		return nil, fmt.Errorf("estate: the PKI contract declares no active root generation")
+	case 1:
+		return active[0], nil
+	}
+
+	ids := make([]string, 0, len(active))
+	for _, generation := range active {
+		ids = append(ids, generation.ID)
+	}
+
+	return nil, fmt.Errorf("estate: the PKI contract has %d active root generations (%s): ask for a trust domain's own root",
+		len(active), strings.Join(ids, ", "))
+}
+
+// privateRoot is the root generation the view's Root shows: the private
+// domain's, or, with no private domain named, the one active generation.
+func privateRoot(in *PKI) (*pki.RootGeneration, error) {
+	if in.Private != "" && in.Contract.DNSTrustDomain(in.Private) != nil {
+		generation, err := in.Contract.TrustDomainRoot(in.Private)
+		if err != nil {
+			return nil, fmt.Errorf("estate: %w", err)
+		}
+
+		return generation, nil
+	}
+
+	return ActiveGeneration(in.Contract)
+}
+
+// declaredRoots are the root generations some trust domain is declared
+// under, in authored order.
+func declaredRoots(contract *pki.Contract) []*pki.RootGeneration {
+	var roots []*pki.RootGeneration
+
 	for i := range contract.Generations {
-		if contract.Generations[i].State == pki.GenerationActive {
-			return &contract.Generations[i], nil
+		generation := &contract.Generations[i]
+		if contract.DeclaresUnder(generation.ID) {
+			roots = append(roots, generation)
 		}
 	}
 
-	return nil, fmt.Errorf("estate: the PKI contract declares no active root generation")
+	return roots
+}
+
+func rootAuthority(contract *pki.Contract, generation *pki.RootGeneration) RootAuthority {
+	return RootAuthority{
+		GenerationID:  generation.ID,
+		CommonName:    generation.Certificate.Subject.CommonName,
+		Organization:  generation.Certificate.Subject.Organization,
+		Custody:       generation.Custody.Provider,
+		KeyCurve:      contract.Global.KeyCurve,
+		TTL:           generation.Lifetime,
+		MaxPathLength: generation.Certificate.MaxPathLen,
+		ArtifactPath:  contract.RootArtifactPath(generation.ID),
+	}
 }
 
 // zoneOf is the zone a trust domain substitutes for {zone} on one cluster:

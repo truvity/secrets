@@ -192,7 +192,9 @@ func Deploy(c *pulumi.Context, desired *estate.Desired, opts Options) error {
 		return nil
 	}
 
-	generation, err := estate.ActiveGeneration(in.PKI.Contract)
+	// The identity domain's own root: with one root per party, the CA's
+	// organization is the root that signs it.
+	generation, err := in.PKI.Contract.TrustDomainRoot(identity.Name)
 	if err != nil {
 		return err
 	}

@@ -19,12 +19,18 @@ const (
 
 type (
 	// CustodyOutputs is what the custody side (pkg/custody deployed by
-	// Pulumi, or hand-written custody) publishes about the root keys: the
-	// public identifiers of each generation's key pair and the roles. It is
-	// a plain YAML file synced into the repository that holds the contract,
-	// and it is public information -- ARNs and regions, never a credential.
-	// [Contract.VerifyCustody] binds it to the contract and to the flags of
-	// one signing command before that command may name a key.
+	// Pulumi, or hand-written custody) publishes about the root keys of ONE
+	// AWS account: the public identifiers of each generation's key pair and
+	// the account's two roles. It is a plain YAML file synced into the
+	// repository that holds the contract, and it is public information --
+	// ARNs and regions, never a credential. [Contract.VerifyCustody] binds
+	// it to the contract and to the flags of one signing command before
+	// that command may name a key.
+	//
+	// A contract whose generations sit in several accounts (one root per
+	// party, each in its own account) has one such file per account; a
+	// ceremony passes the file of the account its generation's custody is
+	// in ([Contract.GenerationsInAccount]).
 	//
 	//	adminRoleArn: arn:aws:iam::111122223333:role/root-admin
 	//	ceremonyRoleArn: arn:aws:iam::111122223333:role/root-ceremony
@@ -192,7 +198,11 @@ func (g CustodyGeneration) validate(id, ceremonyRoleARN string, ceremonyRole arn
 // the first disagreement, with a message that names both sides:
 //
 //   - the outputs are internally consistent ([CustodyOutputs.Validate]);
-//   - every authored generation is published, and nothing else is;
+//   - generationID's custody is in the outputs' account: a file for
+//     another account is refused, never searched;
+//   - every authored generation of that account is published, and nothing
+//     else is (a generation of another account is no generation of these
+//     outputs);
 //   - for every authored generation the key's account is the authored
 //     account, the primary region is the authored region, and the replica
 //     region is the authored disaster-recovery region (when the contract
@@ -217,6 +227,12 @@ func (c *Contract) VerifyCustody(outputs *CustodyOutputs, generationID string, r
 
 	if err := outputs.Validate(); err != nil {
 		return nil, fmt.Errorf("custody outputs: %w", err)
+	}
+
+	if account := outputs.accountID(); generation.Custody.AccountID != account {
+		return nil, fmt.Errorf(
+			"custody check: generation %q: the published key is in account %s, the contract's custody account is %s: pass that account's custody outputs",
+			generationID, account, generation.Custody.AccountID)
 	}
 
 	proven, err := c.verifyGenerations(outputs)
@@ -274,8 +290,8 @@ func (c *Contract) VerifyCustody(outputs *CustodyOutputs, generationID string, r
 
 // VerifyCustodyOutputs is the part of [Contract.VerifyCustody] that needs no
 // signing request: the outputs are internally consistent and every authored
-// generation is published, and nothing else is, in the authored account and
-// regions. A consumer that only reads the outputs (to build a client for the
+// generation of their account is published, and nothing else is, in the
+// authored account and regions. A consumer that only reads the outputs (to build a client for the
 // custody roles) calls this before it trusts any field of them.
 func (c *Contract) VerifyCustodyOutputs(outputs *CustodyOutputs) error {
 	if outputs == nil {
@@ -291,25 +307,35 @@ func (c *Contract) VerifyCustodyOutputs(outputs *CustodyOutputs) error {
 	return err
 }
 
-// verifyGenerations binds every authored generation to its published one.
+// verifyGenerations binds every authored generation of the outputs'
+// account to its published one. A contract with one custody account binds
+// every generation, as it always has.
 func (c *Contract) verifyGenerations(outputs *CustodyOutputs) ([]string, error) {
 	authored := make([]string, 0, len(c.Generations))
 	for i := range c.Generations {
 		authored = append(authored, c.Generations[i].ID)
 	}
 
+	account := outputs.accountID()
+
 	for _, id := range sortedKeys(outputs.Generations) {
-		if !slices.Contains(authored, id) {
+		generation := c.RootGeneration(id)
+		if generation == nil {
 			return nil, fmt.Errorf("custody check: the custody outputs publish generation %q, which the contract does not author (authored: %s)",
 				id, strings.Join(authored, ", "))
 		}
+
+		if generation.Custody.AccountID != account {
+			return nil, fmt.Errorf("custody check: generation %q: the published key is in account %s, the contract's custody account is %s",
+				id, account, generation.Custody.AccountID)
+		}
 	}
 
+	// Every published generation is authored in this account, and Validate
+	// proved at least one is published, so the account holds one or more.
 	var proven []string
 
-	for i := range c.Generations {
-		generation := &c.Generations[i]
-
+	for _, generation := range c.GenerationsInAccount(account) {
 		published, ok := outputs.Generations[generation.ID]
 		if !ok {
 			return nil, fmt.Errorf("custody check: the custody outputs do not publish authored generation %q", generation.ID)
@@ -345,6 +371,18 @@ func (c *Contract) verifyGenerations(outputs *CustodyOutputs) ([]string, error) 
 	}
 
 	return proven, nil
+}
+
+// accountID is the account the outputs speak for: their roles' (Validate
+// has proven both roles, and every key, are in it). Empty when the ceremony
+// role ARN does not parse, which Validate refuses first.
+func (o *CustodyOutputs) accountID() string {
+	role, err := arn.Parse(o.CeremonyRoleARN)
+	if err != nil {
+		return ""
+	}
+
+	return role.AccountID
 }
 
 func parseKeyARN(value, region string) (arn.ARN, error) {
