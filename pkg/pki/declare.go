@@ -253,10 +253,12 @@ func environmentCATrustDomain(domainName, environment string) string {
 	return domainName + "-" + environment
 }
 
-// EmergencyServerSpec derives the break-glass declaration: the generation
-// must be the active one AND trusted fleet-wide (a leaf of a root nobody
-// trusts restores nothing), and dnsName must sit under a DNS trust domain
-// that requires trust.
+// EmergencyServerSpec derives the break-glass declaration under one root
+// generation: the generation must be active AND trusted fleet-wide (a leaf
+// of a root nobody trusts restores nothing), and dnsName must sit under a
+// DNS trust domain that requires trust and is declared under that same
+// generation. With one root per party, each root signs break-glass leaves
+// for its own domains only.
 func (c *Contract) EmergencyServerSpec(generationID, dnsName string, notBefore time.Time) (ceremony.EmergencyServerSpec, error) {
 	generation := c.RootGeneration(generationID)
 	if generation == nil {
@@ -265,7 +267,7 @@ func (c *Contract) EmergencyServerSpec(generationID, dnsName string, notBefore t
 
 	if generation.State != GenerationActive {
 		return ceremony.EmergencyServerSpec{}, fmt.Errorf(
-			"pki: root generation %q is %s; only the active generation signs a break-glass leaf", generationID, generation.State)
+			"pki: root generation %q is %s; only an active generation signs a break-glass leaf", generationID, generation.State)
 	}
 
 	if !slices.Contains(c.Migration.TrustedGenerations, generationID) {
@@ -289,7 +291,8 @@ func (c *Contract) EmergencyServerSpec(generationID, dnsName string, notBefore t
 	}
 
 	if !under {
-		return ceremony.EmergencyServerSpec{}, fmt.Errorf("pki: %q is not under a dns trust domain that requires trust", dnsName)
+		return ceremony.EmergencyServerSpec{}, fmt.Errorf(
+			"pki: %q is not under a dns trust domain that requires trust and is declared below root generation %q", dnsName, generationID)
 	}
 
 	if notBefore.IsZero() {

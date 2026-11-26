@@ -224,12 +224,13 @@ func TestValidateRefusals(t *testing.T) {
 			"must not repeat global.keyCurve",
 		},
 		{"no generations", mutate(func(c *Contract) { c.Generations = nil }), "at least one rootGeneration is required"},
-		{"two active generations", mutate(func(c *Contract) {
+		{"no active generation", mutate(func(c *Contract) { c.Generations[0].State = GenerationRetired }), "at least one rootGeneration must be active, got none"},
+		{"empty rootGeneration with two active generations", mutate(func(c *Contract) {
 			second := c.Generations[0]
 			second.ID = "example-root-2027-01"
 			c.Generations = append(c.Generations, second)
-		}), "exactly one rootGeneration must be active"},
-		{"no active generation", mutate(func(c *Contract) { c.Generations[0].State = GenerationRetired }), "exactly one rootGeneration must be active"},
+			c.TrustDomains.DNS[0].RootGeneration = ""
+		}), "rootGeneration is required: 2 root generations are active (example-root-2026-01, example-root-2027-01)"},
 		{"duplicated generation id", mutate(func(c *Contract) {
 			second := c.Generations[0]
 			c.Generations = append(c.Generations, second)

@@ -176,3 +176,38 @@ func WithVendorDomain(t testing.TB, in *estate.Inputs, clusters ...string) {
 		cluster.Zones = map[string]string{VendorDomain: cluster.Name + ".vendor-a.example"}
 	}
 }
+
+// VendorRoot is the root generation [WithVendorRoot] adds.
+const VendorRoot = "vendor-a-root-2026-11"
+
+// WithVendorRoot moves the vendor domain ([WithVendorDomain], which it must
+// follow) under a root of its own, in an account of its own: two active
+// roots, one per party.
+func WithVendorRoot(t testing.TB, in *estate.Inputs) {
+	t.Helper()
+
+	contract := in.PKI.Contract
+
+	generation := contract.Generations[0]
+	generation.ID = VendorRoot
+	generation.Certificate.Subject = pki.Subject{CommonName: "Vendor A Private Root 2026-11", Organization: "Vendor A"}
+	generation.Custody.AccountID = "444455556666"
+	generation.Custody.Profile = "vendor-a-root@admin"
+	generation.Custody.TrustedPrincipalARNPattern = "arn:aws:iam::444455556666:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_role-admin_*"
+	generation.State = pki.GenerationActive
+
+	contract.Generations = append(contract.Generations, generation)
+	contract.Migration.TrustedGenerations = append(contract.Migration.TrustedGenerations, VendorRoot)
+
+	vendor := contract.DNSTrustDomain(VendorDomain)
+	if vendor == nil {
+		t.Fatal("WithVendorRoot needs WithVendorDomain first")
+	}
+
+	vendor.RootGeneration = VendorRoot
+	vendor.DomainIntermediate.Subject.Organization = "Vendor A"
+
+	if err := contract.Validate(); err != nil {
+		t.Fatalf("the contract with a vendor root does not validate: %v", err)
+	}
+}
