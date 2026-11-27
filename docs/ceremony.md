@@ -88,7 +88,7 @@ restating from [model.md](model.md#pki-mounts-issuers-roles): OpenBAO
 same way it already ignores `excludedIpRanges`.
 
 > **Custody cross-check.** With `--contract`, every command below that
-> signs (`create-root`, `sign-intermediate`, `sign-emergency-server`) also
+> signs (`sign-root`, `sign-intermediate`, `sign-emergency-server`) also
 > takes `--custody-outputs <file>` (the custody side's published key, region,
 > replica and role) and refuses to go on when the key, its region or replica,
 > the generation, the role or the profile disagree with it or with the
@@ -138,8 +138,10 @@ nothing is signed.
 `sign-root` is the root ceremony in the same two steps as the
 intermediates: a review that prints the exact template and its hash, then
 a signing run that signs only that hash. It is what a repository holding
-its **own** contract (one party's root, in that party's own account) runs;
-`create-root` stays for existing hierarchy files.
+its **own** contract (one party's root, in that party's own account) runs.
+`create-root` stays for existing hierarchy files and refuses `--contract`:
+it signs on its first run, unreviewed, so a contract's root is signed only
+here.
 
 ```sh
 # 1. Review. With --public-key (the key's exported SubjectPublicKeyInfo,
@@ -162,18 +164,31 @@ What it guarantees:
 
 - The template comes only from the contract: subject, validity, path
   length, key usage and name constraint as authored. No flag changes them.
-- The custody check runs first: the key, the ceremony role and the profile
+- The custody check runs first, in every mode, and cannot be skipped:
+  `--custody-outputs` is required, and `--skip-custody-check` and
+  `--hierarchy` are refused. The key, the ceremony role and the profile
   are the generation's published ones in the outputs file, and that file
-  is the generation's own account's. Another account's file is refused.
-  Without `--key-arn` the key is the generation's published primary key.
+  is the generation's own account's. Another account's file is refused,
+  and so is a `--key-arn` the file does not publish. Without `--key-arn`
+  the key is the generation's published primary key.
+- The confirmed hash is the SHA-256 of the whole TBSCertificate, and the
+  TBSCertificate holds the SubjectPublicKeyInfo: confirming it confirms
+  the subject, the validity, the extensions *and* the public key. Review
+  with the key's own export (`--public-key`), compared out of band with
+  the custody side's published key.
 - `--confirm-template` refuses a hash that is not the template's own
   before anything else, so a typo costs nothing.
 - A KMS key that is not the reviewed public key is refused before the
   reservation: one key's review cannot confirm another key's signature.
 - `<artifact>.attempt` is created exclusively and fsync'd before the one
   `ECDSA_SHA_384` digest signature, and never removed. An ambiguous outcome
-  fails closed on every rerun; abandon the generation, never delete the
-  reservation.
+  (KMS errors after the request left, the process dies) fails closed on
+  every rerun; abandon the generation, never delete the reservation.
+- **Commit `<artifact>.attempt` at once**, with the artifact when there is
+  one and alone when there is not: it is the only record that the key may
+  have signed, and a reservation lost with a working tree lets a later run
+  sign the generation again. Check the repository does not ignore it:
+  `git check-ignore -v <artifact>.attempt` must print nothing.
 - The artifact is written without overwrite under the contract's own
   artifact directory, relative to the contract file, so the root lives in
   the repository that holds the contract.

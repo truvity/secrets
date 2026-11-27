@@ -6,10 +6,12 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -89,6 +91,34 @@ func TestSignRootFailsClosedOnAnEarlierAttempt(t *testing.T) {
 	_, err := SignRoot(context.Background(), client, plan, RootSignOptions{ConfirmTemplateSHA256: plan.TemplateSHA256})
 	require.Error(t, err)
 	assert.Zero(t, client.signCalls)
+	assert.NoFileExists(t, plan.ArtifactPath)
+}
+
+// signFails is the KMS double whose Sign reaches KMS and comes back with
+// an error: the caller cannot know whether a signature exists.
+type signFails struct{ *fakeKMS }
+
+func (s signFails) Sign(context.Context, *kms.SignInput, ...func(*kms.Options)) (*kms.SignOutput, error) {
+	s.signCalls++
+
+	return nil, errors.New("connection reset after the request was sent")
+}
+
+// A Sign that fails after the reservation leaves the reservation in place
+// and writes no artifact; every rerun, even with a working KMS, then fails
+// closed and signs nothing.
+func TestSignRootKeepsTheReservationWhenSignFails(t *testing.T) {
+	plan, client := rootPlanFixture(t)
+
+	_, err := SignRoot(context.Background(), signFails{client}, plan, RootSignOptions{ConfirmTemplateSHA256: plan.TemplateSHA256})
+	require.ErrorContains(t, err, "connection reset")
+	assert.Equal(t, 1, client.signCalls)
+	assert.FileExists(t, plan.ArtifactPath+AttemptSuffix, "the reservation is never removed")
+	assert.NoFileExists(t, plan.ArtifactPath)
+
+	_, err = SignRoot(context.Background(), client, plan, RootSignOptions{ConfirmTemplateSHA256: plan.TemplateSHA256})
+	require.Error(t, err)
+	assert.Equal(t, 1, client.signCalls, "a rerun after an unknown outcome must not sign")
 	assert.NoFileExists(t, plan.ArtifactPath)
 }
 
