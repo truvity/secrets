@@ -5,6 +5,18 @@ heading here is a patch cut automatically for dependency bumps alone; its
 GitHub Release lists them. Both charts are released at every version, and
 from v0.2.0 on the Go module and `openbaoctl` with them.
 
+## v0.54.0
+
+### Added
+
+- **`openbaoctl pki sign-root`: the reviewed root ceremony.** The same two steps as `sign-intermediate`: `--print-template` prints the exact root template and the SHA-256 of its TBSCertificate (with `--public-key`, the key's exported SubjectPublicKeyInfo, it needs no credential), and `--confirm-template <sha256>` signs only that template. A different hash is refused before anything; a KMS key that is not the reviewed one is refused before `<artifact>.attempt` is reserved; a rerun after success signs nothing; `--import-certificate` records a root signed earlier. With `--contract`, the key defaults to the generation's published primary key in `--custody-outputs`, and the artifact is written under the contract's own artifact directory, so a repository that holds its own contract keeps its own root (ADR 0009).
+- **`pkg/ceremony`: `PrepareRoot`, `SignRoot`, `RootPlan`, `ParsePublicKeyPEM`.** The library form of the reviewed root ceremony, for a repository that wraps it in its own command.
+- **`pkg/pki`: `migration.trustedExternal`.** A root authored in another repository, committed as a PEM file under the artifact directory and pinned by its SHA-256 fingerprint, joins `TrustAnchors` and `TrustBundlePEM` after the authored roots. `TrustAnchors` refuses a file that is not exactly the pinned self-signed CA certificate; `Validate` refuses a name that is an authored generation, a duplicate, a path outside the artifact directory and a malformed digest.
+
+### Changed
+
+- The custody check, for a root that has no artifact yet and no `--key-arn`, takes the generation's published primary key from `--custody-outputs` instead of refusing, and still proves it. Only a root ceremony hits that case (`sign-root`; `create-root` keeps requiring `--key-arn`); every other command signs with the committed root artifact's key, as before.
+
 ## v0.53.0
 
 ### Added

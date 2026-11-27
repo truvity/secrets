@@ -578,6 +578,30 @@ be built from -- a generation named in the contract before its ceremony ran
 is a promise nothing can keep, so `TrustAnchors` fails rather than
 returning an incomplete bundle.
 
+### Roots authored elsewhere: `migration.trustedExternal`
+
+A party that holds its own root keeps its contract, key and ceremony in
+its own repository ([ceremony.md](ceremony.md), `sign-root`). Verifiers
+that live elsewhere still need that root in their bundle, so a contract
+may trust it without authoring it:
+
+```yaml
+migration:
+  trustedGenerations: [example-root-2026-01]
+  trustedExternal:
+    - name: vendor-b-private-root-2026-12   # how the anchor is filed
+      certificate: external/vendor-b.pem    # under artifactDir
+      sha256: 4F0C...                       # the certificate's SHA-256 (DER), hex
+```
+
+An external anchor signs nothing here and nothing here is declared under
+it. `TrustAnchors` reads the file and refuses it unless it is exactly one
+PEM certificate whose SHA-256 is the pinned one, a CA, its own issuer and
+verifying under its own key. The external anchors follow the authored ones
+in the bundle, in the order given. `Validate` refuses a name that is an
+authored generation, a duplicate name, a path outside the artifact
+directory, and a digest that is not 64 hex digits.
+
 ## What this package deliberately does not do
 
 - **No estate-specific glue.** Which environments exist, which AWS

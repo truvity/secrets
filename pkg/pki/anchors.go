@@ -2,9 +2,12 @@ package pki
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -53,7 +56,65 @@ func (c *Contract) TrustAnchors() ([]TrustAnchor, error) {
 		anchors = append(anchors, *anchor)
 	}
 
+	for _, external := range c.Migration.TrustedExternal {
+		anchor, err := c.loadExternalAnchor(external)
+		if err != nil {
+			return nil, err
+		}
+
+		anchors = append(anchors, *anchor)
+	}
+
 	return anchors, nil
+}
+
+// loadExternalAnchor reads one external root and holds it to its pinned
+// digest: one PEM certificate, exactly the fingerprinted one, a CA, its own
+// issuer, verifying under its own key.
+func (c *Contract) loadExternalAnchor(external TrustedExternal) (*TrustAnchor, error) {
+	artifactPath := c.ArtifactPath(external.Certificate)
+
+	raw, err := c.readArtifactFile(artifactPath)
+	if err != nil {
+		return nil, fmt.Errorf("pki: external anchor %q: read %s: %w", external.Name, artifactPath, err)
+	}
+
+	block, rest := pem.Decode(raw)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("pki: external anchor %q: %s must hold exactly one PEM CERTIFICATE", external.Name, artifactPath)
+	}
+
+	digest := sha256.Sum256(block.Bytes)
+	fingerprint := strings.ToUpper(hex.EncodeToString(digest[:]))
+
+	if !strings.EqualFold(fingerprint, external.SHA256) {
+		return nil, fmt.Errorf("pki: external anchor %q: %s has SHA-256 %s, not the pinned %s",
+			external.Name, artifactPath, fingerprint, strings.ToUpper(external.SHA256))
+	}
+
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("pki: external anchor %q: %w", external.Name, err)
+	}
+
+	if !certificate.IsCA || !certificate.BasicConstraintsValid {
+		return nil, fmt.Errorf("pki: external anchor %q: certificate is not a CA", external.Name)
+	}
+
+	if certificate.Subject.String() != certificate.Issuer.String() {
+		return nil, fmt.Errorf("pki: external anchor %q: certificate is not self-signed: issuer %q", external.Name, certificate.Issuer.String())
+	}
+
+	if err := certificate.CheckSignatureFrom(certificate); err != nil {
+		return nil, fmt.Errorf("pki: external anchor %q: certificate does not verify against its own key: %w", external.Name, err)
+	}
+
+	return &TrustAnchor{
+		GenerationID:      external.Name,
+		CertificatePEM:    string(pem.EncodeToMemory(block)),
+		FingerprintSHA256: fingerprint,
+		NotAfter:          certificate.NotAfter,
+	}, nil
 }
 
 // TrustBundlePEM is the one set of CA certificates every client of the

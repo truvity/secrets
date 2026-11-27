@@ -569,6 +569,27 @@ type (
 		// fails [Contract.TrustAnchors]: trusted must mean something a
 		// verifier can act on, not an intention.
 		TrustedGenerations []string `yaml:"trustedGenerations"`
+		// TrustedExternal lists roots this contract trusts without
+		// authoring them: a root whose contract, key and ceremony live in
+		// another repository (each party that holds its own root). Each is
+		// distributed with the authored ones ([Contract.TrustAnchors],
+		// [Contract.TrustBundlePEM]), after them, in the order given. It
+		// signs nothing here and nothing here is declared under it.
+		TrustedExternal []TrustedExternal `yaml:"trustedExternal,omitempty"`
+	}
+
+	// TrustedExternal is one root certificate trusted by digest: a
+	// committed PEM file under ArtifactDir whose SHA-256 fingerprint must
+	// be the pinned one. A swapped or edited file fails
+	// [Contract.TrustAnchors], where it is still only a render.
+	TrustedExternal struct {
+		// Name is how the anchor is filed in every distributed bundle; it
+		// must not be an authored generation's ID.
+		Name string `yaml:"name"`
+		// Certificate is the PEM file, relative to ArtifactDir.
+		Certificate string `yaml:"certificate"`
+		// SHA256 is the certificate's SHA-256 fingerprint (DER), hex.
+		SHA256 string `yaml:"sha256"`
 	}
 )
 
