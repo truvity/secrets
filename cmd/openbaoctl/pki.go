@@ -301,6 +301,7 @@ func pkiCommand() *cli.Command {
 					})
 				},
 			},
+			pkiSignRootCommand(sourceFlags, signingFlags, source, signing),
 			{
 				Name:  "sign-intermediate",
 				Usage: "sign a domain intermediate's CSR (exported from OpenBAO) with the KMS root",

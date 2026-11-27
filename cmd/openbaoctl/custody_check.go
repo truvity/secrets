@@ -71,8 +71,16 @@ func (s signingOptions) withCustody(source *pkiSource, artifactKeyARN string) (s
 		return s, nil, err
 	}
 
+	// A root has no committed artifact yet, so with no --key-arn the key
+	// is the generation's published primary key; VerifyCustody below still
+	// proves it is exactly that key, in that account and region.
+	keyARN := s.keyARNOr(artifactKeyARN)
+	if published, ok := outputs.Generations[source.generation]; ok && keyARN == "" {
+		keyARN = published.PrimaryKeyARN
+	}
+
 	verdict, err := source.contract.VerifyCustody(outputs, source.generation, pki.CustodyRequest{
-		KeyARN:         s.keyARNOr(artifactKeyARN),
+		KeyARN:         keyARN,
 		ArtifactKeyARN: artifactKeyARN,
 		RoleARN:        s.roleARN,
 		Profile:        s.awsProfile,

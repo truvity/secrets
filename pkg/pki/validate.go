@@ -1,7 +1,10 @@
 package pki
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -1161,6 +1164,41 @@ func (m Migration) validate(generations map[string]generationInfo, needed bool) 
 		}
 
 		seenGenerations[id] = struct{}{}
+	}
+
+	return m.validateExternal(generations)
+}
+
+// validateExternal refuses an external anchor that could be mistaken for,
+// or shadow, an authored one, or that names its file or digest loosely.
+func (m Migration) validateExternal(generations map[string]generationInfo) error {
+	seen := map[string]struct{}{}
+
+	for i, anchor := range m.TrustedExternal {
+		at := fmt.Sprintf("pki: migration.trustedExternal[%d]", i)
+
+		if !isDNSLabel(anchor.Name) {
+			return fmt.Errorf("%s name %q must be a lower-case DNS label", at, anchor.Name)
+		}
+
+		if _, authored := generations[anchor.Name]; authored {
+			return fmt.Errorf("%s name %q is an authored root generation: trust it through trustedGenerations", at, anchor.Name)
+		}
+
+		if _, duplicate := seen[anchor.Name]; duplicate {
+			return fmt.Errorf("%s duplicates name %q", at, anchor.Name)
+		}
+
+		seen[anchor.Name] = struct{}{}
+
+		clean := path.Clean(anchor.Certificate)
+		if anchor.Certificate == "" || path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") || clean != anchor.Certificate {
+			return fmt.Errorf("%s certificate %q must be a clean path inside the artifact directory", at, anchor.Certificate)
+		}
+
+		if digest, err := hex.DecodeString(anchor.SHA256); err != nil || len(digest) != sha256.Size {
+			return fmt.Errorf("%s sha256 %q must be the certificate's SHA-256 fingerprint, 64 hex digits", at, anchor.SHA256)
+		}
 	}
 
 	return nil

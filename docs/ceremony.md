@@ -133,6 +133,64 @@ an earlier controlled ceremony: it is verified exactly like a fresh one
 identifiers, algorithm, and exactly the authored name constraint) and
 nothing is signed.
 
+### The reviewed form: `sign-root`
+
+`sign-root` is the root ceremony in the same two steps as the
+intermediates: a review that prints the exact template and its hash, then
+a signing run that signs only that hash. It is what a repository holding
+its **own** contract (one party's root, in that party's own account) runs;
+`create-root` stays for existing hierarchy files.
+
+```sh
+# 1. Review. With --public-key (the key's exported SubjectPublicKeyInfo,
+#    e.g. `aws kms get-public-key ... --query PublicKey` wrapped in a PEM
+#    PUBLIC KEY block) this needs no credential, so a second reviewer can
+#    reproduce the hash from the same checkout.
+openbaoctl pki sign-root --contract cfg/private-pki.yaml \
+  --generation <party>-private-root-YYYY-MM \
+  --custody-outputs cfg/gen/private-pki-root.yaml \
+  --public-key root.pub.pem --print-template
+
+# 2. Sign exactly that.
+openbaoctl pki sign-root --contract cfg/private-pki.yaml \
+  --generation <party>-private-root-YYYY-MM \
+  --custody-outputs cfg/gen/private-pki-root.yaml \
+  --confirm-template <the sha256 from step 1>
+```
+
+What it guarantees:
+
+- The template comes only from the contract: subject, validity, path
+  length, key usage and name constraint as authored. No flag changes them.
+- The custody check runs first: the key, the ceremony role and the profile
+  are the generation's published ones in the outputs file, and that file
+  is the generation's own account's. Another account's file is refused.
+  Without `--key-arn` the key is the generation's published primary key.
+- `--confirm-template` refuses a hash that is not the template's own
+  before anything else, so a typo costs nothing.
+- A KMS key that is not the reviewed public key is refused before the
+  reservation: one key's review cannot confirm another key's signature.
+- `<artifact>.attempt` is created exclusively and fsync'd before the one
+  `ECDSA_SHA_384` digest signature, and never removed. An ambiguous outcome
+  fails closed on every rerun; abandon the generation, never delete the
+  reservation.
+- The artifact is written without overwrite under the contract's own
+  artifact directory, relative to the contract file, so the root lives in
+  the repository that holds the contract.
+- A rerun after success verifies the artifact and signs nothing; a review
+  then reports that there is nothing to sign.
+- `--import-certificate <pem>` records a root signed earlier, verified like
+  a fresh one, and signs nothing.
+
+The same repository then signs its intermediates under its own root with
+`sign-intermediate --contract`: the root artifact and the custody outputs
+are read from that repository's contract and its account's file.
+
+A root trusted by verifiers elsewhere, but authored in another
+repository, is listed there under `migration.trustedExternal` (name, a
+committed PEM file under the artifact directory, and its SHA-256
+fingerprint); see [pki.md](pki.md).
+
 ## 2. The domain intermediates
 
 Each intermediate's key is generated inside its OpenBAO PKI mount

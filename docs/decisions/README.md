@@ -31,6 +31,7 @@ reasoning for the decisions they cover.
 | [0006](0006-dns-trust-domains-per-environment.md) | Any number of DNS trust domains, each reaching its own environments, and pending domain intermediates (`environments`, `Cluster.Zones`, `PendingDomains`) |
 | [0007](0007-several-active-roots.md) | Several active roots, one per party, with custody outputs per account (`rootGeneration`, `PrivatePKI.Roots`, `Contract.TrustDomainRoot`) |
 | [0008](0008-party-namespaces.md) | A party's trust domains in a namespace of its own, split between the server owner's stack and the party's (`namespace`, `Desired.Vendors`, `SelectVendor`, `Login.Namespace`) |
+| [0009](0009-a-party-signs-its-own-root.md) | A party signs its own root from its own repository (`openbaoctl pki sign-root`, `ceremony.PrepareRoot`/`SignRoot`), and a contract trusts another repository's root by digest (`migration.trustedExternal`) |
 
 ## Template
 
