@@ -2,6 +2,8 @@ package pki
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -38,7 +40,12 @@ type TrustAnchor struct {
 // nothing can keep, so it is an error rather than an empty anchor -- every
 // trust bundle is built from this list.
 func (c *Contract) TrustAnchors() ([]TrustAnchor, error) {
-	anchors := make([]TrustAnchor, 0, len(c.Migration.TrustedGenerations))
+	anchors := make([]TrustAnchor, 0, len(c.Migration.TrustedGenerations)+len(c.Migration.TrustedExternal))
+
+	// A certificate is trusted once, under one name: an external file that
+	// is an authored root, or another external one, is refused rather
+	// than distributed twice.
+	trusted := map[string]string{}
 
 	for _, id := range c.Migration.TrustedGenerations {
 		generation := c.RootGeneration(id)
@@ -53,15 +60,24 @@ func (c *Contract) TrustAnchors() ([]TrustAnchor, error) {
 			return nil, err
 		}
 
+		trusted[strings.ToUpper(anchor.FingerprintSHA256)] = anchor.GenerationID
 		anchors = append(anchors, *anchor)
 	}
 
+	now := time.Now()
+
 	for _, external := range c.Migration.TrustedExternal {
-		anchor, err := c.loadExternalAnchor(external)
+		anchor, err := c.loadExternalAnchor(external, now)
 		if err != nil {
 			return nil, err
 		}
 
+		if name, twice := trusted[anchor.FingerprintSHA256]; twice {
+			return nil, fmt.Errorf("pki: external anchor %q is the certificate already trusted as %q (SHA-256 %s): trust it once",
+				external.Name, name, anchor.FingerprintSHA256)
+		}
+
+		trusted[anchor.FingerprintSHA256] = external.Name
 		anchors = append(anchors, *anchor)
 	}
 
@@ -69,12 +85,15 @@ func (c *Contract) TrustAnchors() ([]TrustAnchor, error) {
 }
 
 // loadExternalAnchor reads one external root and holds it to its pinned
-// digest: one PEM certificate, exactly the fingerprinted one, a CA, its own
-// issuer, verifying under its own key.
-func (c *Contract) loadExternalAnchor(external TrustedExternal) (*TrustAnchor, error) {
+// digest and to what an authored root is: one PEM certificate (a regular
+// file, reached through no symlink), exactly the fingerprinted one, not
+// expired, an ECDSA P-384 key signed with ECDSA SHA-384, a CA whose key
+// usage is exactly certificate and CRL signing, its own issuer byte for
+// byte, verifying under its own key.
+func (c *Contract) loadExternalAnchor(external TrustedExternal, now time.Time) (*TrustAnchor, error) {
 	artifactPath := c.ArtifactPath(external.Certificate)
 
-	raw, err := c.readArtifactFile(artifactPath)
+	raw, err := c.readRegularArtifact(external.Certificate)
 	if err != nil {
 		return nil, fmt.Errorf("pki: external anchor %q: read %s: %w", external.Name, artifactPath, err)
 	}
@@ -97,16 +116,8 @@ func (c *Contract) loadExternalAnchor(external TrustedExternal) (*TrustAnchor, e
 		return nil, fmt.Errorf("pki: external anchor %q: %w", external.Name, err)
 	}
 
-	if !certificate.IsCA || !certificate.BasicConstraintsValid {
-		return nil, fmt.Errorf("pki: external anchor %q: certificate is not a CA", external.Name)
-	}
-
-	if certificate.Subject.String() != certificate.Issuer.String() {
-		return nil, fmt.Errorf("pki: external anchor %q: certificate is not self-signed: issuer %q", external.Name, certificate.Issuer.String())
-	}
-
-	if err := certificate.CheckSignatureFrom(certificate); err != nil {
-		return nil, fmt.Errorf("pki: external anchor %q: certificate does not verify against its own key: %w", external.Name, err)
+	if err := checkExternalCertificate(certificate, now); err != nil {
+		return nil, fmt.Errorf("pki: external anchor %q: %w", external.Name, err)
 	}
 
 	return &TrustAnchor{
@@ -115,6 +126,49 @@ func (c *Contract) loadExternalAnchor(external TrustedExternal) (*TrustAnchor, e
 		FingerprintSHA256: fingerprint,
 		NotAfter:          certificate.NotAfter,
 	}, nil
+}
+
+// checkExternalCertificate holds a root authored elsewhere to the shape
+// every authored root has: nothing about it is re-derived from a contract
+// here, so its own fields are all there is to check.
+func checkExternalCertificate(certificate *x509.Certificate, now time.Time) error {
+	if certificate.NotAfter.Before(now) {
+		return fmt.Errorf("certificate expired at %s", certificate.NotAfter.UTC().Format(time.RFC3339))
+	}
+
+	if key, ok := certificate.PublicKey.(*ecdsa.PublicKey); !ok || key.Curve != elliptic.P384() {
+		return fmt.Errorf("certificate key must be ECDSA P-384")
+	}
+
+	if certificate.SignatureAlgorithm != x509.ECDSAWithSHA384 {
+		return fmt.Errorf("certificate must be signed with %s, not %s", x509.ECDSAWithSHA384, certificate.SignatureAlgorithm)
+	}
+
+	if !certificate.IsCA || !certificate.BasicConstraintsValid {
+		return fmt.Errorf("certificate is not a CA")
+	}
+
+	if certificate.KeyUsage != x509.KeyUsageCertSign|x509.KeyUsageCRLSign {
+		return fmt.Errorf("certificate key usage must be exactly certificate signing and CRL signing")
+	}
+
+	return checkSelfSigned(certificate)
+}
+
+// checkSelfSigned: a trust anchor is trusted by being distributed, not by
+// anything above it, so it must be its own issuer, compared as the encoded
+// names (two names can print alike and differ), and carry its own
+// signature.
+func checkSelfSigned(certificate *x509.Certificate) error {
+	if !bytes.Equal(certificate.RawSubject, certificate.RawIssuer) {
+		return fmt.Errorf("certificate is not self-signed: issuer %q", certificate.Issuer.String())
+	}
+
+	if err := certificate.CheckSignatureFrom(certificate); err != nil {
+		return fmt.Errorf("certificate does not verify against its own key: %w", err)
+	}
+
+	return nil
 }
 
 // TrustBundlePEM is the one set of CA certificates every client of the
@@ -198,15 +252,5 @@ func checkAnchor(generation *RootGeneration, certificate *x509.Certificate) erro
 			certificate.Subject.CommonName, generation.Certificate.Subject.CommonName)
 	}
 
-	// A trust anchor is trusted by being distributed, not by anything
-	// above it, so it must be its own issuer and carry its own signature.
-	if certificate.Subject.String() != certificate.Issuer.String() {
-		return fmt.Errorf("certificate is not self-signed: issuer %q", certificate.Issuer.String())
-	}
-
-	if err := certificate.CheckSignatureFrom(certificate); err != nil {
-		return fmt.Errorf("certificate does not verify against its own key: %w", err)
-	}
-
-	return nil
+	return checkSelfSigned(certificate)
 }

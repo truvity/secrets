@@ -302,23 +302,25 @@ func TestCustodyCheckGuardsTheEmergencyLeafAndTheRoot(t *testing.T) {
 	path, client := setupContract(t)
 
 	var out bytes.Buffer
-	// create-root with a key the outputs do not publish signs nothing.
-	err := runCreateRoot(context.Background(), &out, createRootOptions{
-		source: sourceOptions{contract: path, generation: "example-root-2026-01"},
-		signing: signingOptions{
+	// sign-root with a key the outputs do not publish signs nothing, in
+	// either step.
+	for _, options := range []signRootOptions{{printTemplate: true}, {confirmTemplate: strings.Repeat("0", 64)}} {
+		options.source = sourceOptions{contract: path, generation: "example-root-2026-01"}
+		options.signing = signingOptions{
 			keyARN: "arn:aws:kms:eu-central-1:111122223333:key/mrk-other", kms: client.factory,
 			custodyOutputs: writeCustodyOutputs(t),
-		},
-	})
-	require.ErrorContains(t, err, "the key to sign with is arn:aws:kms:eu-central-1:111122223333:key/mrk-other")
-	assert.Zero(t, client.signCalls)
+		}
+		err := runSignRoot(context.Background(), &out, options)
+		require.ErrorContains(t, err, "the key to sign with is arn:aws:kms:eu-central-1:111122223333:key/mrk-other")
+		assert.Zero(t, client.signCalls)
+	}
 
-	// and without the check at all.
-	err = runCreateRoot(context.Background(), &out, createRootOptions{
-		source:  sourceOptions{contract: path, generation: "example-root-2026-01"},
+	// and without the custody outputs at all.
+	err := runSignRoot(context.Background(), &out, signRootOptions{
+		source: sourceOptions{contract: path, generation: "example-root-2026-01"}, printTemplate: true,
 		signing: signingOptions{keyARN: contractKeyARN, kms: client.factory},
 	})
-	require.ErrorIs(t, err, errCustodyCheckRequired)
+	require.ErrorIs(t, err, errSignRootNeedsCustody)
 	assert.Zero(t, client.signCalls)
 
 	createContractRoot(t, path, client)

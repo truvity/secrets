@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -388,6 +389,43 @@ func (c *Contract) fsRelative(p string) string {
 	}
 
 	return strings.TrimPrefix(p, c.dir+"/")
+}
+
+// readRegularArtifact reads relative, a clean path under the artifact
+// directory, only if every element below that directory is what it says:
+// directories, then a regular file, no symlink anywhere. A path that is
+// clean on paper but reaches outside the repository through a link is
+// refused, never read.
+func (c *Contract) readRegularArtifact(relative string) ([]byte, error) {
+	elements := strings.Split(relative, "/")
+
+	for i := range elements {
+		prefix := c.ArtifactPath(path.Join(elements[:i+1]...))
+
+		info, err := c.lstatArtifact(prefix)
+		if err != nil {
+			return nil, err
+		}
+
+		switch last := i == len(elements)-1; {
+		case info.Mode()&fs.ModeSymlink != 0:
+			return nil, fmt.Errorf("%s is a symlink: an anchor's file must be committed in place", prefix)
+		case last && !info.Mode().IsRegular():
+			return nil, fmt.Errorf("%s is not a regular file", prefix)
+		case !last && !info.IsDir():
+			return nil, fmt.Errorf("%s is not a directory", prefix)
+		}
+	}
+
+	return c.readArtifactFile(c.ArtifactPath(relative))
+}
+
+func (c *Contract) lstatArtifact(p string) (fs.FileInfo, error) {
+	if c.fsys == nil {
+		return os.Lstat(p)
+	}
+
+	return fs.Lstat(c.fsys, c.fsRelative(p))
 }
 
 func (c *Contract) readArtifactFile(p string) ([]byte, error) {

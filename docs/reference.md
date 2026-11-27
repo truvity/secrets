@@ -431,8 +431,8 @@ assumed on top of it.
 
 | Command | Flags | Signs |
 |---|---|---|
-| `pki create-root` | `--hierarchy`, `--key-arn` (required), `--import-certificate`, `--aws-profile`, `--role-arn` | once, unless the artifact exists or a certificate is imported |
-| `pki sign-root` | `--contract`/`--generation` or `--hierarchy`; exactly one of `--print-template`, `--confirm-template <sha256>` or `--import-certificate`; `--public-key` (an offline review), `--custody-outputs` (with `--contract`), `--key-arn` (default: the custody outputs' primary key) | only with `--confirm-template`, once, unless the artifact exists |
+| `pki create-root` | `--hierarchy`, `--key-arn` (required), `--import-certificate`, `--aws-profile`, `--role-arn`; `--contract` is refused (use `sign-root`) | once, unless the artifact exists or a certificate is imported |
+| `pki sign-root` | `--contract`/`--generation` and `--custody-outputs` (required; `--hierarchy` and `--skip-custody-check` are refused); exactly one of `--print-template`, `--confirm-template <sha256>` or `--import-certificate`; `--public-key` (an offline review), `--key-arn` (default: the custody outputs' primary key; must be it) | only with `--confirm-template`, once, unless the artifact exists |
 | `pki sign-intermediate` | `--hierarchy`, `--trust-domain`, `--csr` (required); exactly one of `--print-template` or `--confirm-template <sha256>`; `--key-arn` (default: the root artifact's), `--aws-profile`, `--role-arn` | only with `--confirm-template`, once, unless the artifact exists |
 | `pki verify-intermediate` | `--hierarchy`, `--trust-domain` (required), `--chain-out` (must not exist; default prints the chain) | never; needs no credential |
 | `pki sign-emergency-server` | `--hierarchy`, `--csr` (required); exactly one of `--print-template` or `--confirm-template`; `--not-before` (required to sign: the value `--print-template` printed), `--out` (default `openbao-emergency.crt`, must not exist), `--key-arn`, `--aws-profile`, `--role-arn` | only with `--confirm-template`, once per run; nothing is committed |

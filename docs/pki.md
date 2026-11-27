@@ -371,7 +371,7 @@ is always safe.
 
 ### The custody cross-check
 
-`openbaoctl pki create-root`, `sign-intermediate` (which also signs an
+`openbaoctl pki sign-root`, `sign-intermediate` (which also signs an
 environment's own CA, `--environment`/`--zone`) and `sign-emergency-server`
 take the key, the role and the profile as flags, so a mistyped ARN, a
 generation's neighbour or a key in the wrong region would otherwise reach
@@ -595,12 +595,26 @@ migration:
 ```
 
 An external anchor signs nothing here and nothing here is declared under
-it. `TrustAnchors` reads the file and refuses it unless it is exactly one
-PEM certificate whose SHA-256 is the pinned one, a CA, its own issuer and
-verifying under its own key. The external anchors follow the authored ones
-in the bundle, in the order given. `Validate` refuses a name that is an
-authored generation, a duplicate name, a path outside the artifact
-directory, and a digest that is not 64 hex digits.
+it. Nothing about it is re-derived from this contract, so `TrustAnchors`
+holds the file to the shape every authored root has, and refuses it
+unless it is:
+
+- a regular file, committed in place: a symlink as the file, or as any
+  directory on the way to it under the artifact directory, is refused;
+- exactly one PEM certificate whose SHA-256 is the pinned one;
+- not expired;
+- an ECDSA P-384 key, signed with ECDSA SHA-384;
+- a CA whose key usage is exactly certificate signing and CRL signing;
+- its own issuer, compared as the encoded names, and verifying under its
+  own key;
+- a certificate not already trusted: one that is an authored root, or
+  another external entry, is refused rather than distributed twice.
+
+The external anchors follow the authored ones in the bundle, in the order
+given. `Validate` checks the list whatever else the contract leaves out,
+and refuses a name that is an authored generation, a duplicate name, one
+digest under two names, a path outside the artifact directory, and a
+digest that is not 64 hex digits.
 
 ## What this package deliberately does not do
 

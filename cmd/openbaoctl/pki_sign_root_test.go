@@ -170,23 +170,10 @@ func TestSignRootRefusesAWrongHashBeforeReserving(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(filepath.Dir(contract), "pki-roots", vendorGeneration+".yaml.attempt"))
 }
 
-// Another account's custody outputs are refused before anything: a vendor
-// repository can only sign with its own account's key.
+// Another account's custody outputs are refused before anything, in the
+// review and in the signing run: a vendor repository can only sign with
+// its own account's key.
 func TestSignRootRefusesAnotherAccountsCustody(t *testing.T) {
-	contract, _, client := vendorRepo(t)
-	source := vendorSource()
-	source.contract = contract
-
-	err := runSignRoot(context.Background(), &bytes.Buffer{}, signRootOptions{
-		source: source, publicKey: writePublicKey(t, client), printTemplate: true,
-		signing: signingOptions{custodyOutputs: writeCustodyOutputs(t), kms: noKMS(t)},
-	})
-	require.Error(t, err)
-	assert.Zero(t, client.signCalls)
-}
-
-// A reviewed export of one key cannot confirm a signature by another.
-func TestSignRootRefusesAKMSKeyThatIsNotTheReviewedOne(t *testing.T) {
 	contract, custody, client := vendorRepo(t)
 	source := vendorSource()
 	source.contract = contract
@@ -196,18 +183,52 @@ func TestSignRootRefusesAKMSKeyThatIsNotTheReviewedOne(t *testing.T) {
 		source: source, publicKey: writePublicKey(t, client), printTemplate: true,
 		signing: signingOptions{custodyOutputs: custody, kms: noKMS(t)},
 	}))
+	hash := confirmPattern.FindStringSubmatch(review.String())[1]
+
+	for name, options := range map[string]signRootOptions{
+		"review":  {publicKey: writePublicKey(t, client), printTemplate: true},
+		"signing": {confirmTemplate: hash},
+	} {
+		t.Run(name, func(t *testing.T) {
+			options.source = source
+			options.signing = signingOptions{custodyOutputs: writeCustodyOutputs(t), kms: noKMS(t)}
+
+			err := runSignRoot(context.Background(), &bytes.Buffer{}, options)
+			require.ErrorContains(t, err, vendorGeneration)
+			assert.Zero(t, client.signCalls)
+			assertNoRootAttempt(t, contract)
+		})
+	}
+}
+
+// A reviewed export of one key cannot confirm a signature by another: the
+// hash matches (it is the reviewed key's template), and the KMS key that
+// would sign it is refused before the reservation.
+func TestSignRootRefusesAKMSKeyThatIsNotTheReviewedOne(t *testing.T) {
+	contract, custody, client := vendorRepo(t)
+	source := vendorSource()
+	source.contract = contract
+	reviewed := writePublicKey(t, client)
+
+	var review bytes.Buffer
+	require.NoError(t, runSignRoot(context.Background(), &review, signRootOptions{
+		source: source, publicKey: reviewed, printTemplate: true,
+		signing: signingOptions{custodyOutputs: custody, kms: noKMS(t)},
+	}))
 
 	_, other := setupContract(t)
 
 	err := runSignRoot(context.Background(), &bytes.Buffer{}, signRootOptions{
-		source: source, confirmTemplate: confirmPattern.FindStringSubmatch(review.String())[1],
+		source: source, publicKey: reviewed, confirmTemplate: confirmPattern.FindStringSubmatch(review.String())[1],
 		signing: signingOptions{custodyOutputs: custody, kms: other.factory},
 	})
-	require.Error(t, err, "the template hash binds the reviewed public key; another KMS key hashes differently")
+	require.ErrorContains(t, err, "is not the public key the template was reviewed with")
 	assert.Zero(t, other.signCalls)
+	assert.Zero(t, client.signCalls)
+	assertNoRootAttempt(t, contract)
 }
 
-// Exactly one mode; a key must be named.
+// Exactly one mode.
 func TestSignRootRefusesAmbiguousInvocations(t *testing.T) {
 	contract, custody, client := vendorRepo(t)
 	source := vendorSource()
@@ -220,13 +241,124 @@ func TestSignRootRefusesAmbiguousInvocations(t *testing.T) {
 	} {
 		require.ErrorIs(t, runSignRoot(context.Background(), &bytes.Buffer{}, options), errChooseRootMode)
 	}
+}
 
+// A root is signed only with the key its custody outputs prove. A skipped
+// check, a hierarchy file (which declares no custody) or missing outputs
+// is refused in every mode, before any key is read, whatever --key-arn
+// names; so is a --key-arn the outputs do not publish.
+func TestSignRootSignsOnlyUnderProvenCustody(t *testing.T) {
+	const attacker = "arn:aws:kms:eu-west-1:111122223333:key/mrk-attacker" // not the vendor account's key
+
+	contract, custody, client := vendorRepo(t)
+	hierarchyPath, _ := setup(t)
+	vendor := vendorSource()
+	vendor.contract = contract
+	hierarchySource := sourceOptions{hierarchy: hierarchyPath}
+
+	modes := map[string]signRootOptions{
+		"review":  {printTemplate: true, publicKey: writePublicKey(t, client)},
+		"signing": {confirmTemplate: strings.Repeat("0", 64)},
+		"import":  {importCertificate: filepath.Join(t.TempDir(), "root.pem")},
+	}
+
+	for mode, base := range modes {
+		for name, row := range map[string]struct {
+			source  sourceOptions
+			signing signingOptions
+			want    string
+		}{
+			"a skipped check":       {vendor, signingOptions{keyARN: attacker, skipCustody: "a reason"}, errSignRootRefusesSkip.Error()},
+			"a hierarchy file":      {hierarchySource, signingOptions{keyARN: attacker}, errSignRootNeedsContract.Error()},
+			"a hierarchy and skip":  {hierarchySource, signingOptions{keyARN: attacker, skipCustody: "a reason"}, errSignRootNeedsContract.Error()},
+			"no custody outputs":    {vendor, signingOptions{keyARN: attacker}, errSignRootNeedsCustody.Error()},
+			"an unpublished key":    {vendor, signingOptions{keyARN: attacker, custodyOutputs: custody}, attacker},
+			"another account's key": {vendor, signingOptions{custodyOutputs: writeCustodyOutputs(t)}, vendorGeneration},
+		} {
+			t.Run(mode+"/"+name, func(t *testing.T) {
+				options := base
+				options.source = row.source
+				options.signing = row.signing
+				options.signing.kms = noKMS(t)
+
+				err := runSignRoot(context.Background(), &bytes.Buffer{}, options)
+				require.ErrorContains(t, err, row.want)
+				assert.Zero(t, client.signCalls)
+				assertNoRootAttempt(t, contract)
+
+				matches, globErr := filepath.Glob(filepath.Join(filepath.Dir(hierarchyPath), "roots", "*"))
+				require.NoError(t, globErr)
+				assert.Empty(t, matches, "nothing is reserved or written for a hierarchy")
+			})
+		}
+	}
+}
+
+// A Sign that reaches KMS and fails leaves the reservation: the outcome is
+// unknown, so the generation is spent and every rerun fails closed.
+func TestSignRootKeepsTheReservationWhenKMSFails(t *testing.T) {
+	contract, custody, client := vendorRepo(t)
+	source := vendorSource()
+	source.contract = contract
+
+	var review bytes.Buffer
+	require.NoError(t, runSignRoot(context.Background(), &review, signRootOptions{
+		source: source, publicKey: writePublicKey(t, client), printTemplate: true,
+		signing: signingOptions{custodyOutputs: custody, kms: noKMS(t)},
+	}))
+	hash := confirmPattern.FindStringSubmatch(review.String())[1]
+
+	client.signErr = errors.New("connection reset after the request was sent")
 	err := runSignRoot(context.Background(), &bytes.Buffer{}, signRootOptions{
-		source: source, printTemplate: true,
-		signing: signingOptions{skipCustody: "a test", kms: client.factory},
+		source: source, confirmTemplate: hash,
+		signing: signingOptions{custodyOutputs: custody, kms: client.factory},
 	})
-	require.ErrorContains(t, err, "--key-arn is required")
-	assert.Zero(t, client.signCalls)
+	require.ErrorContains(t, err, "connection reset")
+	assert.Equal(t, 1, client.signCalls)
+
+	artifact := filepath.Join(filepath.Dir(contract), "pki-roots", vendorGeneration+".yaml")
+	assert.FileExists(t, artifact+".attempt", "the reservation is never removed")
+	assert.NoFileExists(t, artifact)
+
+	client.signErr = nil
+	err = runSignRoot(context.Background(), &bytes.Buffer{}, signRootOptions{
+		source: source, confirmTemplate: hash,
+		signing: signingOptions{custodyOutputs: custody, kms: client.factory},
+	})
+	require.Error(t, err, "a rerun after an unknown outcome fails closed")
+	assert.Equal(t, 1, client.signCalls, "and signs nothing")
+	assert.NoFileExists(t, artifact)
+}
+
+// create-root signs on its first run, unreviewed, so a contract's root is
+// refused there and pointed at sign-root: with or without --key-arn, in
+// every mode, nothing is read or signed.
+func TestCreateRootRefusesAContract(t *testing.T) {
+	contract, custody, client := vendorRepo(t)
+	source := vendorSource()
+	source.contract = contract
+
+	for name, options := range map[string]createRootOptions{
+		"the published key": {source: source, signing: signingOptions{custodyOutputs: custody, kms: noKMS(t)}},
+		"a named key":       {source: source, signing: signingOptions{keyARN: contractKeyARN, custodyOutputs: custody, kms: noKMS(t)}},
+		"an import":         {source: source, importCertificate: "root.pem", signing: signingOptions{custodyOutputs: custody, kms: noKMS(t)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := runCreateRoot(context.Background(), &bytes.Buffer{}, options)
+			require.ErrorIs(t, err, errCreateRootNeedsReview)
+			assert.Contains(t, err.Error(), "sign-root")
+			assert.Zero(t, client.signCalls)
+			assertNoRootAttempt(t, contract)
+		})
+	}
+}
+
+func assertNoRootAttempt(t *testing.T, contract string) {
+	t.Helper()
+
+	artifact := filepath.Join(filepath.Dir(contract), "pki-roots", vendorGeneration+".yaml")
+	assert.NoFileExists(t, artifact+".attempt")
+	assert.NoFileExists(t, artifact)
 }
 
 // A root signed earlier is recorded without signing.

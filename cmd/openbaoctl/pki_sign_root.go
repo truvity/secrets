@@ -15,13 +15,26 @@ import (
 
 	"github.com/truvity/secrets/pkg/ceremony"
 	"github.com/truvity/secrets/pkg/kmssigner"
+	"github.com/truvity/secrets/pkg/pki"
 )
 
 const flagPublicKey = "public-key"
 
-var errChooseRootMode = errors.New(
-	"choose one: --" + flagPrintTemplate + " to review the exact root template, --" + flagConfirmTemplate +
-		" <sha256> to sign it, or --" + flagImportCertificate + " <pem> to record a root signed earlier")
+var (
+	errChooseRootMode = errors.New(
+		"choose one: --" + flagPrintTemplate + " to review the exact root template, --" + flagConfirmTemplate +
+			" <sha256> to sign it, or --" + flagImportCertificate + " <pem> to record a root signed earlier")
+
+	// A root is signed only with the key, role and profile its custody
+	// outputs prove: a hierarchy file declares no custody, and a skipped
+	// check would let any --key-arn through with a warning.
+	errSignRootNeedsContract = errors.New("sign-root needs --" + flagContract + " and --" + flagGeneration +
+		": a root is signed only under the custody its contract declares (a --" + flagHierarchy + " file declares none)")
+	errSignRootNeedsCustody = errors.New("sign-root needs --" + flagCustodyOutputs +
+		" (the generation's account's file): a root is signed only with the key, role and profile it proves")
+	errSignRootRefusesSkip = errors.New("sign-root refuses --" + flagSkipCustodyCheck +
+		": a root is signed only with the key, role and profile --" + flagCustodyOutputs + " proves")
+)
 
 // signRootOptions drives `openbaoctl pki sign-root`: the reviewed,
 // confirmed form of create-root, for any repository that holds a contract
@@ -42,7 +55,7 @@ func pkiSignRootCommand(sourceFlags, signingFlags []cli.Flag, source func(*cli.C
 		Name:  "sign-root",
 		Usage: "review, then sign once, the root certificate with the KMS root key (or record one signed earlier)",
 		Description: "The root ceremony in two steps, as sign-intermediate:\n\n" +
-			"  --print-template   builds the root template from --contract/--generation (or --hierarchy) and the\n" +
+			"  --print-template   builds the root template from --contract/--generation and the\n" +
 			"                     root key's public key and prints it with its template sha256. With --public-key\n" +
 			"                     (the key's exported SubjectPublicKeyInfo, PEM) it needs no credential, so a second\n" +
 			"                     reviewer can reproduce the hash; without it the key is read from KMS.\n" +
@@ -51,9 +64,9 @@ func pkiSignRootCommand(sourceFlags, signingFlags []cli.Flag, source func(*cli.C
 			"                     the one self-signature. A rerun after success signs nothing.\n" +
 			"  --import-certificate <pem>   verifies and records a root signed earlier; signs nothing.\n\n" +
 			"The artifact is written under the contract's own artifact directory, relative to the contract\n" +
-			"file, so a repository that holds its own contract keeps its own root. With --contract the key, the\n" +
-			"role and the profile come from --custody-outputs (that account's file) and must match the\n" +
-			"generation; --key-arn is needed only without it.",
+			"file, so a repository that holds its own contract keeps its own root. Only --contract: the key,\n" +
+			"the role and the profile come from --custody-outputs (that account's file), which is required,\n" +
+			"and any --key-arn, --role-arn or --aws-profile must match it; --skip-custody-check is refused.",
 		Flags: append(append([]cli.Flag{
 			&cli.StringFlag{Name: flagKeyARN, Usage: "the root generation's KMS primary key ARN (default: --" + flagCustodyOutputs + "'s)"},
 			&cli.StringFlag{Name: flagPublicKey, Usage: "the root key's exported public key (PEM PUBLIC KEY) for an offline --" + flagPrintTemplate},
@@ -79,6 +92,15 @@ func runSignRoot(ctx context.Context, out io.Writer, options signRootOptions) er
 		return errChooseRootMode
 	}
 
+	switch {
+	case options.source.contract == "":
+		return errSignRootNeedsContract
+	case options.signing.skipCustody != "":
+		return errSignRootRefusesSkip
+	case options.signing.custodyOutputs == "":
+		return errSignRootNeedsCustody
+	}
+
 	pkiSource, err := loadSource(options.source)
 	if err != nil {
 		return err
@@ -89,16 +111,21 @@ func runSignRoot(ctx context.Context, out io.Writer, options signRootOptions) er
 		return err
 	}
 
+	signing, err := defaultRootKey(options.signing, pkiSource.generation)
+	if err != nil {
+		return err
+	}
+
 	// The custody check is offline, so the review shows it: what an
 	// operator confirms with the template hash is the template and this.
-	signing, check, err := options.signing.withCustody(pkiSource, "")
+	signing, check, err := signing.withCustody(pkiSource, "")
 	if err != nil {
 		return err
 	}
 
 	keyARN := signing.keyARN
 	if keyARN == "" {
-		return fmt.Errorf("--%s is required without --%s: the root's key must be named", flagKeyARN, flagCustodyOutputs)
+		return fmt.Errorf("the custody outputs %s publish no primary key for %s", options.signing.custodyOutputs, pkiSource.generation)
 	}
 
 	artifactPath := pkiSource.rootArtifactPath()
@@ -148,6 +175,28 @@ func runSignRoot(ctx context.Context, out io.Writer, options signRootOptions) er
 	_, err = io.WriteString(out, check.text+"\n"+proofText(result.Proof)+"\n"+string(raw))
 
 	return err
+}
+
+// defaultRootKey names the key a root ceremony signs with when --key-arn is
+// not given: the generation's published primary key in the custody outputs.
+// Only sign-root does this, because only its signature is confirmed against
+// a reviewed hash; withCustody then proves the key as it proves any other.
+// An unpublished generation is left for withCustody to name.
+func defaultRootKey(signing signingOptions, generation string) (signingOptions, error) {
+	if signing.keyARN != "" {
+		return signing, nil
+	}
+
+	outputs, err := pki.LoadCustodyOutputs(signing.custodyOutputs)
+	if err != nil {
+		return signing, err
+	}
+
+	if published, ok := outputs.Generations[generation]; ok {
+		signing.keyARN = published.PrimaryKeyARN
+	}
+
+	return signing, nil
 }
 
 // rootPublicKey is the reviewed export when one is given (no credential),

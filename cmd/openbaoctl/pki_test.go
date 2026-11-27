@@ -127,6 +127,9 @@ type fakeKMS struct {
 	key       *ecdsa.PrivateKey
 	signCalls int
 	regions   []string
+	// signErr, when set, is what every Sign returns: the call reached KMS
+	// and its outcome is unknown to the caller.
+	signErr error
 }
 
 func (f *fakeKMS) GetPublicKey(context.Context, *kms.GetPublicKeyInput, ...func(*kms.Options)) (*kms.GetPublicKeyOutput, error) {
@@ -145,6 +148,10 @@ func (f *fakeKMS) GetPublicKey(context.Context, *kms.GetPublicKeyInput, ...func(
 
 func (f *fakeKMS) Sign(_ context.Context, input *kms.SignInput, _ ...func(*kms.Options)) (*kms.SignOutput, error) {
 	f.signCalls++
+	if f.signErr != nil {
+		return nil, f.signErr
+	}
+
 	signature, err := ecdsa.SignASN1(rand.Reader, f.key, input.Message)
 
 	return &kms.SignOutput{Signature: signature}, err
@@ -211,14 +218,22 @@ func createRoot(t *testing.T, path string, client *fakeKMS) {
 	assert.Contains(t, out.String(), "generationId: example-root-2026-01")
 }
 
+// createContractRoot signs a contract's root the only way a contract's
+// root is signed: sign-root's review, then its confirmation.
 func createContractRoot(t *testing.T, path string, client *fakeKMS) {
 	t.Helper()
 
+	source := sourceOptions{contract: path, generation: "example-root-2026-01"}
+	signing := signingOptions{keyARN: contractKeyARN, kms: client.factory, custodyOutputs: writeCustodyOutputs(t)}
+
+	var review bytes.Buffer
+	require.NoError(t, runSignRoot(context.Background(), &review, signRootOptions{source: source, printTemplate: true, signing: signing}))
+
+	hash := confirmPattern.FindStringSubmatch(review.String())
+	require.Len(t, hash, 2)
+
 	var out bytes.Buffer
-	require.NoError(t, runCreateRoot(context.Background(), &out, createRootOptions{
-		source:  sourceOptions{contract: path, generation: "example-root-2026-01"},
-		signing: signingOptions{keyARN: contractKeyARN, kms: client.factory, custodyOutputs: writeCustodyOutputs(t)},
-	}))
+	require.NoError(t, runSignRoot(context.Background(), &out, signRootOptions{source: source, confirmTemplate: hash[1], signing: signing}))
 	assert.Contains(t, out.String(), "generationId: example-root-2026-01")
 }
 

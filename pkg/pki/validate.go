@@ -1144,6 +1144,12 @@ func (s SignAlerts) validate(needed bool) error {
 }
 
 func (m Migration) validate(generations map[string]generationInfo, needed bool) error {
+	// External anchors are checked whatever else the contract leaves out:
+	// a list nothing else needs is still a list of files to read.
+	if err := m.validateExternal(generations); err != nil {
+		return err
+	}
+
 	if len(m.TrustedGenerations) == 0 && !needed {
 		return nil
 	}
@@ -1166,13 +1172,14 @@ func (m Migration) validate(generations map[string]generationInfo, needed bool) 
 		seenGenerations[id] = struct{}{}
 	}
 
-	return m.validateExternal(generations)
+	return nil
 }
 
 // validateExternal refuses an external anchor that could be mistaken for,
 // or shadow, an authored one, or that names its file or digest loosely.
 func (m Migration) validateExternal(generations map[string]generationInfo) error {
 	seen := map[string]struct{}{}
+	digests := map[string]string{}
 
 	for i, anchor := range m.TrustedExternal {
 		at := fmt.Sprintf("pki: migration.trustedExternal[%d]", i)
@@ -1199,6 +1206,13 @@ func (m Migration) validateExternal(generations map[string]generationInfo) error
 		if digest, err := hex.DecodeString(anchor.SHA256); err != nil || len(digest) != sha256.Size {
 			return fmt.Errorf("%s sha256 %q must be the certificate's SHA-256 fingerprint, 64 hex digits", at, anchor.SHA256)
 		}
+
+		digest := strings.ToUpper(anchor.SHA256)
+		if other, twice := digests[digest]; twice {
+			return fmt.Errorf("%s sha256 is also %q's: one certificate is trusted under one name", at, other)
+		}
+
+		digests[digest] = anchor.Name
 	}
 
 	return nil

@@ -25,7 +25,14 @@ repository that holds a contract, in the same two steps as
 - `--confirm-template <sha256>` signs only that template: a different hash
   is refused before anything, a KMS key that is not the reviewed one is
   refused before the reservation, then `<artifact>.attempt` is reserved
-  and the one signature made.
+  and the one signature made. The hash covers the TBSCertificate, and so
+  the public key.
+
+**Custody is proven, never waived.** `sign-root` takes only a contract
+and its generation's custody outputs: `--skip-custody-check` and
+`--hierarchy` are refused, so the key that signs a root is always the one
+its account publishes, through its ceremony role and profile.
+`create-root`, which signs on its first run, refuses `--contract`.
 
 The library holds it as `ceremony.PrepareRoot`, `ceremony.SignRoot` and
 `RootPlan`, so a repository that wraps the ceremony in its own command
@@ -48,9 +55,11 @@ here is declared under it.
 
 - A party's root ceremony needs no code of its own: a contract, that
   account's custody outputs, and the command.
-- Every root signature is reviewed first, as every intermediate already
-  was.
-- `create-root` keeps its behaviour for hierarchy files and existing
-  callers; new ceremonies use `sign-root`.
+- Every root a contract declares is signed only after review, and only
+  with its proven custody, as every intermediate already was.
+- `create-root` keeps its behaviour for hierarchy files only; a contract's
+  root, its import included, goes through `sign-root`.
+- `<artifact>.attempt` is committed as soon as it exists: it is the only
+  record that the key may have signed.
 - A verifier that trusts another party's root holds that root's bytes and
   digest, reviewed in its own repository; a swapped file fails the render.

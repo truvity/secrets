@@ -284,11 +284,11 @@ func pkiCommand() *cli.Command {
 		Commands: []*cli.Command{
 			{
 				Name:  "create-root",
-				Usage: "create (or verify, or import) the root certificate with the KMS root key",
-				Description: "Builds the root template from --hierarchy or --contract/--generation and the KMS key's\n" +
-					"public key, reserves <artifact>.attempt, and asks KMS for the one self-signature. An\n" +
-					"existing artifact is verified instead and nothing is signed; --import-certificate records\n" +
-					"an existing root.",
+				Usage: "create (or verify, or import) a --hierarchy root certificate with the KMS root key",
+				Description: "Builds the root template from --hierarchy and the KMS key's public key, reserves\n" +
+					"<artifact>.attempt, and asks KMS for the one self-signature. An existing artifact is\n" +
+					"verified instead and nothing is signed; --import-certificate records an existing root.\n\n" +
+					"--contract is refused: a contract's root is signed with sign-root, reviewed first.",
 				Flags: append(append([]cli.Flag{
 					&cli.StringFlag{Name: flagKeyARN, Usage: "the root generation's KMS primary key ARN", Required: true},
 					&cli.StringFlag{Name: flagImportCertificate, Usage: "verify and record this existing root certificate (PEM) instead of signing"},
@@ -398,7 +398,17 @@ func pkiCommand() *cli.Command {
 	}
 }
 
+// errCreateRootNeedsReview: create-root signs on its first run, unreviewed,
+// so a contract's root goes through sign-root's review and confirmation.
+var errCreateRootNeedsReview = errors.New("create-root signs without a review, so a --" + flagContract +
+	" root is signed with `pki sign-root` (--" + flagPrintTemplate + ", then --" + flagConfirmTemplate +
+	" <sha256>; --" + flagImportCertificate + " records one signed earlier)")
+
 func runCreateRoot(ctx context.Context, out io.Writer, options createRootOptions) error {
+	if options.source.contract != "" {
+		return errCreateRootNeedsReview
+	}
+
 	pkiSource, err := loadSource(options.source)
 	if err != nil {
 		return err
