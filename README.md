@@ -46,7 +46,7 @@ What the rename changed, and what it did not:
 | `cmd/approvercheck`, `pkg/approvercheck` (Go) | Proves the cert-manager approver layer for OpenBAO-issued certificates: an offline port of approver-policy's evaluator that says whether a policy approves every certificate request, and that the blanket approver is off ([docs/approver.md](docs/approver.md)); `charts/openbao-consumers` renders the policies it checks, optionally |
 | `openbaoctl` | The CLI over the ceremony, from a hierarchy file; linux and darwin binaries on every release |
 | `cmd/openbao-hostcert` | A standalone EC2 host-certificate renewer: signs an STS `GetCallerIdentity` request with the instance's own AWS credentials, logs in to an `AWSAuthMount`, and renews the host's SSH certificate from a `SSHHostMount` role; runs unattended as root under a systemd timer |
-| access-roster integration | The contract with an access-roster issuer -- people, CI jobs and operators signing in by their groups, SSH and database certificates for `sluisctl bao`/`sluisctl pg` -- as a `pkg/model` preset (`model.Roster`), a neutral example (`examples/roster`) and a conformance test against a real `bao server -dev` |
+| sluis integration | The contract with a sluis issuer -- people, CI jobs and operators signing in by their groups, SSH and database certificates for `sluisctl bao`/`sluisctl pg` -- as a `pkg/model` preset (`model.Roster`), a neutral example (`examples/roster`) and a conformance test against a real `bao server -dev` |
 
 Charts publish to `oci://ghcr.io/truvity/charts/<chart>` on every tag,
 from v0.1.0 on; from v0.2.0 on the same tag is also the Go module
@@ -278,6 +278,12 @@ _, err := custody.Deploy(ctx, custody.Args{
 })
 ```
 
+## Platform part and company part
+
+**Platform part.** The platform admin applies `charts/openbao-ops` beside the server and `charts/openbao-consumers` on each cluster, which gives each company a store bounded to its namespaces. The admin also applies the server's configuration with `pkg/model`, `pkg/apply` and `pkg/estate`, which gives each company a path ([docs/adoption.md](docs/adoption.md), [docs/estate.md](docs/estate.md)).
+
+**Company part.** A company's SRE puts its secret values under its own path and writes its External Secrets requests in its project namespaces. The store admits only requests from those namespaces ([docs/esoaws.md](docs/esoaws.md), [docs/doctrine.md](docs/doctrine.md)).
+
 ## Consumers
 
 | Consumer | Surface |
@@ -289,7 +295,7 @@ touches a key (see Status); it does not serve an estate on another cloud.
 
 ## Neighbours
 
-- **access-roster** is the issuer this server trusts; OpenBAO is a relying
+- **sluis** is the issuer this server trusts; OpenBAO is a relying
   party of it, never the other way round. The contract is
   [docs/integrations/access-roster.md](docs/integrations/access-roster.md).
 - **audit** is where a record of what happened here ends up: every server
@@ -350,7 +356,7 @@ touches a key (see Status); it does not serve an estate on another cloud.
 - [docs/model.md](docs/model.md) — OpenBAO's desired state per engine,
   its apply, and the resource names an existing configuration adopts
 - [docs/integrations/access-roster.md](docs/integrations/access-roster.md)
-  — the access-roster issuer, end to end: the two doors, groups to
+  — the sluis issuer, end to end: the two doors, groups to
   policies, the operators' door, the credential paths, CI, and every
   failure mode
 - [docs/team-secrets.md](docs/team-secrets.md) — a team's shared
@@ -396,7 +402,7 @@ just check          # build + lint + golden renders + Go tests (a real bao serve
 just golden         # regenerate tests/golden, the ceremony's template goldens, the model example and the apply's resources — review the diff
 ```
 
-The access-roster conformance test (`conformance/`) starts the `bao`
+The sluis conformance test (`conformance/`) starts the `bao`
 binary the dev shell pins; outside it the test skips, and `just test` sets
 `OPENBAO_CONFORMANCE=required` so that it never does there.
 
